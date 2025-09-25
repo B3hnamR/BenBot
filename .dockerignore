@@ -1,12 +1,10 @@
 ﻿__pycache__/
 *.py[cod]
-*.log
 .env
 .venv/
 venv/
-build/
-dist/
+.git/
+.gitignore
 .idea/
 .vscode/
-.pytest_cache/
-.mypy_cache/
+.tests_cache/
