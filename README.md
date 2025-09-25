@@ -1,4 +1,4 @@
-﻿# Ben Bot
+# Ben Bot
 
 Personal Telegram assistant with inline admin control, subscription gate, and future-ready sales workflows.
 

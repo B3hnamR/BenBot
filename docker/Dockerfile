@@ -1,4 +1,4 @@
-﻿# syntax=docker/dockerfile:1.7-labs
+# syntax=docker/dockerfile:1.7-labs
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \

@@ -1,4 +1,4 @@
-﻿[tool.poetry]
+[tool.poetry]
 name = "ben-bot"
 version = "0.1.0"
 description = "Personal Telegram bot with admin and sales management for Ben"
