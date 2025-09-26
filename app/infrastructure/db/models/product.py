@@ -21,9 +21,9 @@ class Product(IntPKMixin, TimestampMixin, Base):
     inventory: Mapped[int | None] = mapped_column(Integer())
     is_active: Mapped[bool] = mapped_column(Boolean(), default=True, nullable=False)
     position: Mapped[int] = mapped_column(Integer(), default=0, nullable=False)
-    metadata: Mapped[dict | None] = mapped_column(JSON())
+    extra_attrs: Mapped[dict | None] = mapped_column(JSON())
 
-    questions: Mapped[List["ProductQuestion"]] = relationship(
+    questions: Mapped[list["ProductQuestion"]] = relationship(
         "ProductQuestion",
         back_populates="product",
         cascade="all, delete-orphan",

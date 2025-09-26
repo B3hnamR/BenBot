@@ -1,4 +1,4 @@
-﻿"""Initial database schema"""
+"""Initial database schema"""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def upgrade() -> None:
         sa.Column("inventory", sa.Integer(), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("position", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("metadata", sa.JSON(), nullable=True),
+        sa.Column("extra_attrs", sa.JSON(), nullable=True),
     )
 
     op.create_table(
@@ -123,7 +123,7 @@ def upgrade() -> None:
         sa.Column("payment_charge_id", sa.String(length=128), nullable=True),
         sa.Column("payment_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("notes", sa.String(length=512), nullable=True),
-        sa.Column("metadata", sa.JSON(), nullable=True),
+        sa.Column("extra_attrs", sa.JSON(), nullable=True),
     )
     op.create_index("ix_orders_user_id", "orders", ["user_id"])
     op.create_index("ix_orders_product_id", "orders", ["product_id"])

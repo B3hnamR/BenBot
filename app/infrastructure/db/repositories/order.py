@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
@@ -21,7 +21,7 @@ class OrderRepository(BaseRepository):
         amount: Decimal,
         currency: str,
         expires_at: datetime | None,
-        metadata: dict | None = None,
+        extra_attrs: dict | None = None,
     ) -> Order:
         order = Order(
             public_id=str(uuid4()),
@@ -31,7 +31,7 @@ class OrderRepository(BaseRepository):
             currency=currency,
             status=OrderStatus.DRAFT,
             payment_expires_at=expires_at,
-            metadata=metadata,
+            extra_attrs=extra_attrs,
         )
         await self.add(order)
         return order

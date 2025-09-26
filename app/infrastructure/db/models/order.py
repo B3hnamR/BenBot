@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
@@ -31,7 +31,7 @@ class Order(IntPKMixin, TimestampMixin, Base):
     payment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     notes: Mapped[str | None] = mapped_column(String(length=512))
-    metadata: Mapped[dict | None] = mapped_column(JSON())
+    extra_attrs: Mapped[dict | None] = mapped_column(JSON())
 
     user: Mapped["UserProfile"] = relationship("UserProfile", back_populates="orders")
     product: Mapped["Product"] = relationship("Product")
