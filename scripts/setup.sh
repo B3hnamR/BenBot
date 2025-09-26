@@ -56,7 +56,12 @@ else
   REQUIRE_SUBSCRIPTION=false
 fi
 
-read -rp "Required channel usernames (comma separated, optional): " REQUIRED_CHANNELS
+read -rp "Required channel usernames (comma separated, optional): " REQUIRED_CHANNELS_INPUT
+if [[ -n "$REQUIRED_CHANNELS_INPUT" ]]; then
+  REQUIRED_CHANNELS="['${REQUIRED_CHANNELS_INPUT//,/","}' ]"
+else
+  REQUIRED_CHANNELS="[]"
+fi
 read -rp "Payment provider token (optional): " PAYMENT_PROVIDER_TOKEN
 read -rp "Payment currency [USD]: " PAYMENT_CURRENCY
 PAYMENT_CURRENCY=${PAYMENT_CURRENCY:-USD}

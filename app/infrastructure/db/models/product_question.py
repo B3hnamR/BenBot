@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from sqlalchemy import Boolean, Enum, Integer, JSON, String
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import ProductQuestionType
@@ -10,7 +10,9 @@ from app.infrastructure.db.base import Base, IntPKMixin, TimestampMixin
 class ProductQuestion(IntPKMixin, TimestampMixin, Base):
     __tablename__ = "product_questions"
 
-    product_id: Mapped[int] = mapped_column(foreign_key="products.id", nullable=False)
+    product_id: Mapped[int] = mapped_column(
+        Integer(), ForeignKey("products.id"), nullable=False
+    )
     field_key: Mapped[str] = mapped_column(String(length=64), nullable=False)
     prompt: Mapped[str] = mapped_column(String(length=512), nullable=False)
     help_text: Mapped[str | None] = mapped_column(String(length=512))
