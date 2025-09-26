@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import sys
 from typing import Any
 
@@ -15,8 +15,19 @@ def _resolve_level(level_name: str) -> int:
     return resolved if isinstance(resolved, int) else logging.INFO
 
 
-def _orjson_dumps(obj: Any) -> str:
-    return orjson.dumps(obj, option=orjson.OPT_NON_STR_KEYS).decode()
+def _orjson_dumps(
+    obj: Any,
+    *,
+    default: Any | None = None,
+    option: int | None = None,
+    **_: Any,
+) -> str:
+    dump_kwargs: dict[str, Any] = {
+        "option": orjson.OPT_NON_STR_KEYS if option is None else option | orjson.OPT_NON_STR_KEYS
+    }
+    if default is not None:
+        dump_kwargs["default"] = default
+    return orjson.dumps(obj, **dump_kwargs).decode()
 
 
 def configure_logging(level_name: str) -> None:
