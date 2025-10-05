@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Sequence
 
@@ -34,7 +34,7 @@ class ProductRepository(BaseRepository):
             .options(joinedload(Product.questions))
             .where(Product.slug == slug)
         )
-        return result.scalar_one_or_none()
+        return result.unique().scalar_one_or_none()
 
     async def get_by_id(self, product_id: int) -> Product | None:
         result = await self.session.execute(
@@ -42,7 +42,7 @@ class ProductRepository(BaseRepository):
             .options(joinedload(Product.questions))
             .where(Product.id == product_id)
         )
-        return result.scalar_one_or_none()
+        return result.unique().scalar_one_or_none()
 
     async def slug_exists(self, slug: str) -> bool:
         result = await self.session.execute(

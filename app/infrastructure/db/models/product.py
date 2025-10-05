@@ -14,7 +14,7 @@ class Product(IntPKMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(length=255), nullable=False)
     slug: Mapped[str] = mapped_column(String(length=255), nullable=False, unique=True)
-    summary: Mapped[str | None] = mapped_column(String(length=512))
+    summary: Mapped[str | None] = mapped_column(Text())
     description: Mapped[str | None] = mapped_column(Text())
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(length=3), default="USD", nullable=False)

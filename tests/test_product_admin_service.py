@@ -63,6 +63,25 @@ async def test_update_product_refreshes_slug_when_name_changes(session: AsyncSes
     assert updated.slug == 'updated-name'
 
 
+
+@pytest.mark.asyncio()
+async def test_create_product_accepts_long_summary(session: AsyncSession) -> None:
+    service = ProductAdminService(session)
+    long_summary = "x" * 2048
+    product = await service.create_product(
+        ProductInput(
+            name='Long Summary Product',
+            summary=long_summary,
+            description=None,
+            price=Decimal('49.99'),
+            currency='USD',
+            inventory=None,
+            position=None,
+        )
+    )
+
+    assert product.summary == long_summary
+
 @pytest.mark.asyncio()
 async def test_toggle_product_flips_active_flag(session: AsyncSession) -> None:
     service = ProductAdminService(session)
