@@ -33,11 +33,7 @@ router = Router(name="common")
 @router.message(CommandStart())
 async def handle_start(message: Message) -> None:
     await message.answer(
-        text=(
-            "Welcome to Ben Bot!
-"
-            "Use the interactive menu below to browse products, manage orders, or contact support."
-        ),
+        "Welcome to Ben Bot!\nUse the interactive menu below to browse products, manage orders, or contact support.",
         reply_markup=main_menu_keyboard(show_admin=_user_is_owner(message.from_user.id)),
     )
 
@@ -139,11 +135,7 @@ async def handle_subscription_refresh(callback: CallbackQuery, session: AsyncSes
     await callback.answer("You still need to join the required channels.", show_alert=True)
     await _safe_edit_message(
         callback.message,
-        text=(
-            "Please join the required channel(s) before continuing."
-            "
-Tap 'I've Joined' once you have access."
-        ),
+        "Please join the required channel(s) before continuing.\nTap 'I've Joined' once you have access.",
         reply_markup=keyboard,
     )
 
