@@ -769,7 +769,7 @@ async def ignore_unexpected_type_selection(callback: CallbackQuery) -> None:
 
 @router.callback_query(
     ProductAdminCallback.filter(
-        F.action.in_("question_required_set", "question_create_confirm", "question_create_cancel")
+        F.action.in_({"question_required_set", "question_create_confirm", "question_create_cancel"})
     ),
     ~StateFilter(ProductQuestionCreateState),
 )
