@@ -4,7 +4,6 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Iterable, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,19 +16,19 @@ from app.infrastructure.db.repositories import (
 
 
 class ProductAdminError(RuntimeError):
-    """Base error for product administration operations."""
+    """Base error for product administration."""
 
 
 class ProductNotFoundError(ProductAdminError):
-    pass
+    """Raised when a product is missing."""
 
 
 class ProductQuestionNotFoundError(ProductAdminError):
-    pass
+    """Raised when a product question is missing."""
 
 
 class ProductValidationError(ProductAdminError):
-    pass
+    """Raised when provided data is invalid."""
 
 
 @dataclass(slots=True)
@@ -57,14 +56,14 @@ class QuestionInput:
 class ProductAdminService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._product_repo = ProductRepository(session)
-        self._question_repo = ProductQuestionRepository(session)
+        self._products = ProductRepository(session)
+        self._questions = ProductQuestionRepository(session)
 
-    async def list_products(self) -> Sequence[Product]:
-        return await self._product_repo.list_all()
+    async def list_products(self) -> list[Product]:
+        return list(await self._products.list_all())
 
     async def get_product(self, product_id: int) -> Product:
-        product = await self._product_repo.get_by_id(product_id)
+        product = await self._products.get_by_id(product_id)
         if product is None:
             raise ProductNotFoundError(f"Product {product_id} not found")
         return product
@@ -73,7 +72,7 @@ class ProductAdminService:
         slug = await self._generate_unique_slug(data.name)
         position = data.position
         if position is None:
-            position = await self._product_repo.get_next_position()
+            position = await self._products.get_next_position()
 
         product = Product(
             name=data.name,
@@ -87,26 +86,35 @@ class ProductAdminService:
             position=position,
             extra_attrs=None,
         )
-        await self._product_repo.add_product(product)
+        await self._products.add_product(product)
         return product
 
     async def update_product(self, product_id: int, **fields: object) -> Product:
         product = await self.get_product(product_id)
 
-        if "name" in fields and fields["name"] is not None:
-            new_name = str(fields["name"])
-            if new_name and new_name != product.name:
+        if "name" in fields and fields["name"]:
+            new_name = str(fields["name"]).strip()
+            if not new_name:
+                raise ProductValidationError("Name cannot be empty.")
+            if new_name != product.name:
                 product.name = new_name
-                product.slug = await self._generate_unique_slug(new_name, current_slug=product.slug)
+                product.slug = await self._generate_unique_slug(
+                    new_name,
+                    current_slug=product.slug,
+                )
 
-        for attr in ("summary", "description", "price", "currency", "inventory", "position", "extra_attrs", "is_active"):
-            if attr in fields and fields[attr] is not None:
+        for attr in (
+            "summary",
+            "description",
+            "price",
+            "currency",
+            "inventory",
+            "position",
+            "extra_attrs",
+            "is_active",
+        ):
+            if attr in fields:
                 setattr(product, attr, fields[attr])
-
-        # Fields explicitly set to None should also be cleared
-        for attr, value in fields.items():
-            if value is None and attr in {"summary", "description", "inventory", "extra_attrs"}:
-                setattr(product, attr, None)
 
         await self._session.flush()
         return product
@@ -119,20 +127,22 @@ class ProductAdminService:
 
     async def delete_product(self, product_id: int) -> None:
         product = await self.get_product(product_id)
-        await self._product_repo.delete(product)
+        await self._products.delete(product)
 
-    async def list_questions(self, product_id: int) -> Sequence[ProductQuestion]:
-        return await self._question_repo.list_for_product(product_id)
+    async def list_questions(self, product_id: int) -> list[ProductQuestion]:
+        return await self._questions.list_for_product(product_id)
 
     async def add_question(self, data: QuestionInput) -> ProductQuestion:
-        # ensure product exists
         await self.get_product(data.product_id)
 
-        existing_fields = {q.field_key for q in await self._question_repo.list_for_product(data.product_id)}
-        if data.field_key in existing_fields:
-            raise ProductValidationError("Field key already exists for this product")
+        existing = {
+            question.field_key
+            for question in await self._questions.list_for_product(data.product_id)
+        }
+        if data.field_key in existing:
+            raise ProductValidationError("Field key already exists for this product.")
 
-        position = await self._question_repo.get_next_position(data.product_id)
+        position = await self._questions.get_next_position(data.product_id)
         question = ProductQuestion(
             product_id=data.product_id,
             field_key=data.field_key,
@@ -143,26 +153,31 @@ class ProductAdminService:
             position=position,
             config=data.config,
         )
-        await self._question_repo.add_question(question)
+        await self._questions.add_question(question)
         return question
 
     async def delete_question(self, question_id: int) -> None:
-        question = await self._question_repo.get_by_id(question_id)
+        question = await self._questions.get_by_id(question_id)
         if question is None:
             raise ProductQuestionNotFoundError(f"Question {question_id} not found")
         product_id = question.product_id
-        await self._question_repo.delete(question)
-        await self._question_repo.reorder_positions(product_id)
+        await self._questions.delete(question)
+        await self._questions.reorder_positions(product_id)
 
-    async def _generate_unique_slug(self, name: str, *, current_slug: str | None = None) -> str:
+    async def _generate_unique_slug(
+        self,
+        name: str,
+        *,
+        current_slug: str | None = None,
+    ) -> str:
         base_slug = self._slugify(name)
-        if not await self._product_repo.slug_exists(base_slug) or base_slug == current_slug:
+        if not await self._products.slug_exists(base_slug) or base_slug == current_slug:
             return base_slug
 
         suffix = 2
         while True:
             candidate = f"{base_slug}-{suffix}"
-            if not await self._product_repo.slug_exists(candidate) or candidate == current_slug:
+            if not await self._products.slug_exists(candidate) or candidate == current_slug:
                 return candidate
             suffix += 1
 

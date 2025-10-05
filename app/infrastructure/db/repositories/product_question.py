@@ -32,7 +32,9 @@ class ProductQuestionRepository(BaseRepository):
 
     async def get_next_position(self, product_id: int) -> int:
         result = await self.session.execute(
-            select(func.max(ProductQuestion.position)).where(ProductQuestion.product_id == product_id)
+            select(func.max(ProductQuestion.position)).where(
+                ProductQuestion.product_id == product_id
+            )
         )
         max_position = result.scalar()
         return (max_position or 0) + 1

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Sequence
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
@@ -18,13 +20,13 @@ class ProductRepository(BaseRepository):
         )
         return list(result.scalars().unique())
 
-    async def list_all(self) -> list[Product]:
+    async def list_all(self) -> Sequence[Product]:
         result = await self.session.execute(
             select(Product)
             .options(joinedload(Product.questions))
             .order_by(Product.position.asc(), Product.created_at.desc())
         )
-        return list(result.scalars().unique())
+        return result.scalars().unique().all()
 
     async def get_by_slug(self, slug: str) -> Product | None:
         result = await self.session.execute(

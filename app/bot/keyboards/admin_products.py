@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
+from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.callbacks.admin_products import ProductAdminCallback
@@ -9,29 +10,29 @@ from app.core.enums import ProductQuestionType
 from app.infrastructure.db.models import Product, ProductQuestion
 
 
-def products_overview_keyboard(products: Sequence[Product]):
+def products_overview_keyboard(products: Sequence[Product]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     for product in products:
-        status_icon = "âœ…" if product.is_active else "ðŸš«"
+        status = "[ON]" if product.is_active else "[OFF]"
         builder.button(
-            text=f"{status_icon} {product.name}",
+            text=f"{status} {product.name}",
             callback_data=ProductAdminCallback(action="view", product_id=product.id).pack(),
         )
 
     builder.button(
-        text="âž• Add product",
+        text="Add product",
         callback_data=ProductAdminCallback(action="add").pack(),
     )
     builder.button(
-        text="â¬…ï¸ Back",
+        text="Back",
         callback_data=ProductAdminCallback(action="back_to_admin").pack(),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def product_detail_keyboard(product: Product):
+def product_detail_keyboard(product: Product) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     toggle_action = "Deactivate" if product.is_active else "Activate"
@@ -40,40 +41,40 @@ def product_detail_keyboard(product: Product):
         callback_data=ProductAdminCallback(action="toggle", product_id=product.id).pack(),
     )
     builder.button(
-        text="âœï¸ Edit details",
+        text="Edit details",
         callback_data=ProductAdminCallback(action="edit_menu", product_id=product.id).pack(),
     )
     builder.button(
-        text="ðŸ§¾ Manage form",
+        text="Manage form",
         callback_data=ProductAdminCallback(action="questions", product_id=product.id).pack(),
     )
     builder.button(
-        text="ðŸ—‘ Delete",
+        text="Delete",
         callback_data=ProductAdminCallback(action="delete", product_id=product.id).pack(),
     )
     builder.button(
-        text="â¬…ï¸ Back to list",
+        text="Back to list",
         callback_data=ProductAdminCallback(action="back_to_list").pack(),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def product_delete_confirm_keyboard(product_id: int):
+def product_delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="âœ… Confirm delete",
+        text="Confirm delete",
         callback_data=ProductAdminCallback(action="delete_confirm", product_id=product_id).pack(),
     )
     builder.button(
-        text="â¬…ï¸ Cancel",
+        text="Cancel",
         callback_data=ProductAdminCallback(action="view", product_id=product_id).pack(),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def product_edit_fields_keyboard(product_id: int):
+def product_edit_fields_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     fields = [
         ("Name", "name"),
@@ -92,57 +93,61 @@ def product_edit_fields_keyboard(product_id: int):
             ).pack(),
         )
     builder.button(
-        text="â¬…ï¸ Back",
+        text="Back",
         callback_data=ProductAdminCallback(action="view", product_id=product_id).pack(),
     )
     builder.adjust(2)
     return builder.as_markup()
 
 
-def product_questions_keyboard(product_id: int, questions: Iterable[ProductQuestion]):
+def product_questions_keyboard(
+    product_id: int, questions: Iterable[ProductQuestion]
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for question in questions:
         label = question.prompt or question.field_key
         builder.button(
-            text=f"ðŸ—‘ {label[:32]}",
+            text=f"Delete: {label[:32]}",
             callback_data=ProductAdminCallback(
                 action="question_delete", product_id=product_id, question_id=question.id
             ).pack(),
         )
 
     builder.button(
-        text="âž• Add question",
+        text="Add question",
         callback_data=ProductAdminCallback(action="question_add", product_id=product_id).pack(),
     )
     builder.button(
-        text="â¬…ï¸ Back",
+        text="Back",
         callback_data=ProductAdminCallback(action="view", product_id=product_id).pack(),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def question_delete_confirm_keyboard(product_id: int, question_id: int):
+def question_delete_confirm_keyboard(
+    product_id: int, question_id: int
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="âœ… Confirm",
+        text="Confirm",
         callback_data=ProductAdminCallback(
             action="question_delete_confirm", product_id=product_id, question_id=question_id
         ).pack(),
     )
     builder.button(
-        text="â¬…ï¸ Cancel",
+        text="Cancel",
         callback_data=ProductAdminCallback(action="questions", product_id=product_id).pack(),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def question_type_keyboard(product_id: int):
+def question_type_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for question_type in ProductQuestionType:
         builder.button(
-            text=question_type.value.title(),
+            text=question_type.value,
             callback_data=ProductAdminCallback(
                 action="question_type_set", product_id=product_id, value=question_type.value
             ).pack(),
@@ -151,7 +156,7 @@ def question_type_keyboard(product_id: int):
     return builder.as_markup()
 
 
-def question_required_keyboard(product_id: int):
+def question_required_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
         text="Required",
@@ -169,30 +174,30 @@ def question_required_keyboard(product_id: int):
     return builder.as_markup()
 
 
-def creation_confirm_keyboard():
+def creation_confirm_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="âœ… Save",
+        text="Save",
         callback_data=ProductAdminCallback(action="create_confirm").pack(),
     )
     builder.button(
-        text="â¬…ï¸ Cancel",
+        text="Cancel",
         callback_data=ProductAdminCallback(action="create_cancel").pack(),
     )
     builder.adjust(2)
     return builder.as_markup()
 
 
-def question_creation_confirm_keyboard(product_id: int):
+def question_creation_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="âœ… Save question",
+        text="Save question",
         callback_data=ProductAdminCallback(
             action="question_create_confirm", product_id=product_id
         ).pack(),
     )
     builder.button(
-        text="â¬…ï¸ Cancel",
+        text="Cancel",
         callback_data=ProductAdminCallback(
             action="question_create_cancel", product_id=product_id
         ).pack(),
