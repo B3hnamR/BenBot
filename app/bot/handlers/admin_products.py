@@ -4,10 +4,11 @@ from __future__ import annotations
 import html
 import re
 from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable, Sequence
+from typing import Iterable, Sequence
 
 from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,6 +148,75 @@ def _is_cancel_message(message: Message) -> bool:
     return message.text is not None and message.text.strip().lower() in {"/cancel", "cancel"}
 
 
+
+
+def _field_prompt(field: str) -> str:
+    prompts = {
+        "name": "Enter new product name. Send /cancel to abort.",
+        "summary": "Enter new summary. Send /skip to clear it or /cancel to abort.",
+        "description": "Enter new description. Send /skip to clear it or /cancel to abort.",
+        "price": "Enter new price (decimal number).",
+        "currency": "Enter currency code (3 letters).",
+        "inventory": "Enter inventory quantity (integer). Send /skip for unlimited.",
+        "position": "Enter display position (positive integer).",
+    }
+    try:
+        return prompts[field]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported field '{field}'") from exc
+
+
+async def _cancel_state(message: Message, state: FSMContext, notice: str) -> None:
+    await state.clear()
+    await message.answer(notice)
+
+
+def _parse_edit_value(field: str, value: str) -> tuple[object | None, bool]:
+    normalized = value.strip()
+
+    if field == "name":
+        if not normalized:
+            raise ProductValidationError("Name cannot be empty.")
+        return normalized, False
+
+    if field in {"summary", "description"}:
+        if not normalized or _is_skip_message_value(normalized):
+            return None, True
+        return normalized, False
+
+    if field == "price":
+        return _parse_decimal(normalized), False
+
+    if field == "currency":
+        candidate = normalized.upper()
+        if not re.fullmatch(r"[A-Z]{3}", candidate):
+            raise ProductValidationError("Currency must be a 3-letter ISO code (e.g. USD).")
+        return candidate, False
+
+    if field == "inventory":
+        if not normalized or _is_skip_message_value(normalized):
+            return None, True
+        return _parse_integer(normalized, allow_zero=True), False
+
+    if field == "position":
+        if not normalized:
+            raise ProductValidationError("Position must be a positive integer.")
+        return _parse_integer(normalized, allow_zero=False), False
+
+    raise ProductValidationError("Unsupported field.")
+
+
+async def _safe_edit_message(
+    message: Message, text: str, *, reply_markup: object | None = None
+) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        details = (exc.message or "").lower()
+        if "message is not modified" not in details:
+            raise
+
+
 def _is_skip_message_value(value: str) -> bool:
     return value.strip().lower() in {"/skip", "skip"}
 # ---------------------------------------------------------------------------
@@ -167,7 +237,7 @@ async def render_products_overview(
     if as_new_message:
         await message.answer(text, reply_markup=markup)
     else:
-        await message.edit_text(text, reply_markup=markup)
+        await _safe_edit_message(message, text, reply_markup=markup)
 
 
 async def render_product_details(
@@ -185,7 +255,7 @@ async def render_product_details(
     if as_new_message:
         await message.answer(text, reply_markup=markup)
     else:
-        await message.edit_text(text, reply_markup=markup)
+        await _safe_edit_message(message, text, reply_markup=markup)
 
 
 async def render_questions_overview(
@@ -208,13 +278,14 @@ async def render_questions_overview(
     if as_new_message:
         await message.answer(payload, reply_markup=markup)
     else:
-        await message.edit_text(payload, reply_markup=markup)
+        await _safe_edit_message(message, payload, reply_markup=markup)
 
 
 async def _return_to_admin_menu(message: Message, session: AsyncSession) -> None:
     config_service = ConfigService(session)
     enabled = await config_service.subscription_required()
-    await message.edit_text(
+    await _safe_edit_message(
+        message,
         "Admin control panel: manage subscription gates, channels, products, and orders.",
         reply_markup=admin_menu_keyboard(subscription_enabled=enabled),
     )
@@ -384,7 +455,7 @@ async def cancel_product_creation(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer()
         return
     await state.clear()
-    await callback.message.edit_text("Product creation aborted.")
+    await _safe_edit_message(callback.message, "Product creation aborted.")
     await callback.answer()
 
 
@@ -410,7 +481,7 @@ async def confirm_product_creation(
         position=data.get('position'),
     )
     product = await service.create_product(product_input)
-    await callback.message.edit_text("Product created successfully.")
+    await _safe_edit_message(callback.message, "Product created successfully.")
     await render_product_details(callback.message, session, product.id, as_new_message=True)
     await callback.answer("Product saved")
 # ---------------------------------------------------------------------------
@@ -428,7 +499,8 @@ async def open_edit_menu(callback: CallbackQuery, session: AsyncSession) -> None
         await callback.answer("Product not found", show_alert=True)
         await render_products_overview(callback.message, session, as_new_message=False)
         return
-    await callback.message.edit_text(
+    await _safe_edit_message(
+        callback.message,
         "Select the field you want to update.",
         reply_markup=product_edit_fields_keyboard(product.id),
     )
@@ -518,7 +590,8 @@ async def confirm_delete_product(callback: CallbackQuery) -> None:
     data = ProductAdminCallback.unpack(callback.data)
     product_id = int(data.product_id)
     text = "Are you sure you want to delete this product? This action cannot be undone."
-    await callback.message.edit_text(
+    await _safe_edit_message(
+        callback.message,
         text,
         reply_markup=product_delete_confirm_keyboard(product_id),
     )
@@ -559,7 +632,8 @@ async def confirm_delete_question(callback: CallbackQuery) -> None:
     data = ProductAdminCallback.unpack(callback.data)
     product_id = int(data.product_id)
     question_id = int(data.question_id)
-    await callback.message.edit_text(
+    await _safe_edit_message(
+        callback.message,
         "Delete this question?",
         reply_markup=question_delete_confirm_keyboard(product_id, question_id),
     )
@@ -653,7 +727,8 @@ async def set_question_type(callback: CallbackQuery, state: FSMContext) -> None:
     question_type = ProductQuestionType(data.value)
     await state.update_data(question_type=question_type)
     await state.set_state(ProductQuestionCreateState.required)
-    await callback.message.edit_text(
+    await _safe_edit_message(
+        callback.message,
         "Should this question be required?",
         reply_markup=question_required_keyboard(int(data.product_id)),
     )
@@ -673,7 +748,7 @@ async def set_question_required(callback: CallbackQuery, state: FSMContext) -> N
     question_type: ProductQuestionType = stored["question_type"]
     if question_type in {ProductQuestionType.SELECT, ProductQuestionType.MULTISELECT}:
         await state.set_state(ProductQuestionCreateState.options)
-        await callback.message.edit_text("Provide answer options separated by commas.")
+        await _safe_edit_message(callback.message, "Provide answer options separated by commas.")
     else:
         await _finalize_question_summary(callback.message, state)
     await callback.answer()
@@ -721,7 +796,7 @@ async def cancel_question_creation(callback: CallbackQuery, state: FSMContext, s
     data = await state.get_data()
     product_id = data.get("product_id")
     await state.clear()
-    await callback.message.edit_text("Question creation aborted.")
+    await _safe_edit_message(callback.message, "Question creation aborted.")
     if product_id is not None:
         await render_questions_overview(callback.message, session, int(product_id), as_new_message=True)
     await callback.answer()
@@ -754,7 +829,7 @@ async def confirm_question_creation(
         await callback.answer(str(exc), show_alert=True)
         await render_questions_overview(callback.message, session, data["product_id"], as_new_message=True)
         return
-    await callback.message.edit_text("Question added successfully.")
+    await _safe_edit_message(callback.message, "Question added successfully.")
     await render_questions_overview(callback.message, session, question.product_id, as_new_message=True)
     await callback.answer("Question saved")
 

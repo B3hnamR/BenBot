@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +26,8 @@ async def handle_show_products(callback: CallbackQuery, session: AsyncSession) -
     products = await service.list_active_products()
 
     if not products:
-        await callback.message.edit_text(
+        await _safe_edit_message(
+            callback.message,
             "No products are available yet. Please check back soon.",
             reply_markup=main_menu_keyboard(
                 show_admin=_user_is_owner(callback.from_user.id)
@@ -34,7 +36,8 @@ async def handle_show_products(callback: CallbackQuery, session: AsyncSession) -
         await callback.answer()
         return
 
-    await callback.message.edit_text(
+    await _safe_edit_message(
+        callback.message,
         text="Choose a product to view details:",
         reply_markup=products_list_keyboard(products),
     )
@@ -60,8 +63,10 @@ async def handle_view_product(callback: CallbackQuery, session: AsyncSession) ->
     if product.description:
         text_lines.append(product.description)
 
-    await callback.message.edit_text(
-        "\n\n".join(text_lines),
+    body = "\n\n".join(text_lines)
+    await _safe_edit_message(
+        callback.message,
+        body,
         reply_markup=product_details_keyboard(product.id),
     )
     await callback.answer()
@@ -69,7 +74,8 @@ async def handle_view_product(callback: CallbackQuery, session: AsyncSession) ->
 
 @router.callback_query(F.data == PRODUCT_BACK_CALLBACK)
 async def handle_products_back(callback: CallbackQuery) -> None:
-    await callback.message.edit_text(
+    await _safe_edit_message(
+        callback.message,
         "Main menu",
         reply_markup=main_menu_keyboard(
             show_admin=_user_is_owner(callback.from_user.id)
@@ -81,6 +87,17 @@ async def handle_products_back(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith(PRODUCT_ORDER_PREFIX))
 async def handle_product_order(callback: CallbackQuery) -> None:
     await callback.answer("Order flow is under construction.", show_alert=True)
+
+
+async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:
+    if message is None:
+        return
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        details = (exc.message or "").lower()
+        if "message is not modified" not in details:
+            raise
 
 
 def _user_is_owner(user_id: int) -> bool:
