@@ -210,3 +210,34 @@ async def test_delete_question_reorders_positions(session: AsyncSession) -> None
     assert len(questions) == 1
     assert questions[0].id == second.id
     assert questions[0].position == 1
+
+
+@pytest.mark.asyncio()
+async def test_question_type_round_trip(session: AsyncSession) -> None:
+    service = ProductAdminService(session)
+    product = await service.create_product(
+        ProductInput(
+            name='Enum Product',
+            summary=None,
+            description=None,
+            price=Decimal('12.00'),
+            currency='USD',
+            inventory=None,
+            position=None,
+        )
+    )
+
+    await service.add_question(
+        QuestionInput(
+            product_id=product.id,
+            field_key='email',
+            prompt='Your email',
+            help_text=None,
+            question_type=ProductQuestionType.EMAIL,
+            is_required=True,
+            config=None,
+        )
+    )
+
+    fetched = await service.get_product(product.id)
+    assert fetched.questions[0].question_type is ProductQuestionType.EMAIL

@@ -17,7 +17,12 @@ class ProductQuestion(IntPKMixin, TimestampMixin, Base):
     prompt: Mapped[str] = mapped_column(String(length=512), nullable=False)
     help_text: Mapped[str | None] = mapped_column(String(length=512))
     question_type: Mapped[ProductQuestionType] = mapped_column(
-        Enum(ProductQuestionType, native_enum=False, length=32),
+        Enum(
+            ProductQuestionType,
+            native_enum=False,
+            length=32,
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
         default=ProductQuestionType.TEXT,
         nullable=False,
     )
