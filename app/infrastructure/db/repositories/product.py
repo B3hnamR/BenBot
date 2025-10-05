@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
 from app.infrastructure.db.models import Product
@@ -14,6 +14,14 @@ class ProductRepository(BaseRepository):
             select(Product)
             .options(joinedload(Product.questions))
             .where(Product.is_active.is_(True))
+            .order_by(Product.position.asc(), Product.created_at.desc())
+        )
+        return list(result.scalars().unique())
+
+    async def list_all(self) -> list[Product]:
+        result = await self.session.execute(
+            select(Product)
+            .options(joinedload(Product.questions))
             .order_by(Product.position.asc(), Product.created_at.desc())
         )
         return list(result.scalars().unique())
@@ -33,3 +41,22 @@ class ProductRepository(BaseRepository):
             .where(Product.id == product_id)
         )
         return result.scalar_one_or_none()
+
+    async def slug_exists(self, slug: str) -> bool:
+        result = await self.session.execute(
+            select(func.count()).select_from(Product).where(Product.slug == slug)
+        )
+        return bool(result.scalar())
+
+    async def add_product(self, product: Product) -> Product:
+        self.session.add(product)
+        await self.session.flush()
+        return product
+
+    async def delete(self, product: Product) -> None:
+        await self.session.delete(product)
+
+    async def get_next_position(self) -> int:
+        result = await self.session.execute(select(func.max(Product.position)))
+        max_position = result.scalar()
+        return (max_position or 0) + 1
