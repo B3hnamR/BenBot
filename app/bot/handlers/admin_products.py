@@ -829,6 +829,10 @@ async def confirm_question_creation(
         await callback.answer(str(exc), show_alert=True)
         await render_questions_overview(callback.message, session, data["product_id"], as_new_message=True)
         return
+    except LookupError:
+        await callback.answer("Could not save question. Please try again.", show_alert=True)
+        await render_questions_overview(callback.message, session, data["product_id"], as_new_message=True)
+        return
     await _safe_edit_message(callback.message, "Question added successfully.")
     await render_questions_overview(callback.message, session, question.product_id, as_new_message=True)
     await callback.answer("Question saved")
