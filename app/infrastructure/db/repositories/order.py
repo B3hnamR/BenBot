@@ -52,13 +52,22 @@ class OrderRepository(BaseRepository):
         await self.add(answer)
         return answer
 
+    async def list_for_user(self, user_id: int) -> list[Order]:
+        result = await self.session.execute(
+            select(Order)
+            .options(joinedload(Order.answers))
+            .where(Order.user_id == user_id)
+            .order_by(Order.created_at.desc())
+        )
+        return list(result.scalars().unique().all())
+
     async def get_by_public_id(self, public_id: str) -> Order | None:
         result = await self.session.execute(
             select(Order)
             .options(joinedload(Order.answers))
             .where(Order.public_id == public_id)
         )
-        return result.scalar_one_or_none()
+        return result.unique().scalar_one_or_none()
 
     async def set_status(self, order: Order, status: OrderStatus) -> Order:
         order.status = status

@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Iterable
+
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from app.infrastructure.db.models import Order
+from app.core.enums import OrderStatus
+
+
+ORDER_CONFIRM_CALLBACK = "order:confirm"
+ORDER_CANCEL_CALLBACK = "order:cancel"
+ORDER_VIEW_PREFIX = "order:view:"
+ORDER_LIST_BACK_CALLBACK = "order:list_back"
+ORDER_CANCEL_ORDER_PREFIX = "order:cancel_order:"
+
+
+def order_confirm_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Confirm order", callback_data=ORDER_CONFIRM_CALLBACK)
+    builder.button(text="Cancel", callback_data=ORDER_CANCEL_CALLBACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def orders_list_keyboard(orders: Iterable[Order]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        builder.button(
+            text=_order_summary_line(order),
+            callback_data=f"{ORDER_VIEW_PREFIX}{order.public_id}",
+        )
+    builder.button(text="Refresh", callback_data=ORDER_LIST_BACK_CALLBACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_details_keyboard(order: Order) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Refresh",
+        callback_data=f"{ORDER_VIEW_PREFIX}{order.public_id}",
+    )
+    if order.status == OrderStatus.AWAITING_PAYMENT:
+        builder.button(
+            text="Cancel order",
+            callback_data=f"{ORDER_CANCEL_ORDER_PREFIX}{order.public_id}",
+        )
+    builder.button(text="Back to orders", callback_data=ORDER_LIST_BACK_CALLBACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_cancel_keyboard(callback_data: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Cancel", callback_data=callback_data)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _order_summary_line(order: Order) -> str:
+    status = order.status.value.replace("_", " ").title()
+    return f"{status} · {order.total_amount} {order.currency}" if order.total_amount is not None else status

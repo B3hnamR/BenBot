@@ -20,6 +20,26 @@ class ConfigService:
         self._channel_repo = RequiredChannelRepository(session)
         self._env_settings = get_settings()
 
+
+    async def invoice_timeout_minutes(self) -> int:
+        value = await self._settings_repo.get_value(
+            SettingKey.INVOICE_TIMEOUT_MINUTES,
+            default=self._env_settings.invoice_payment_timeout_minutes,
+        )
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return self._env_settings.invoice_payment_timeout_minutes
+
+    async def payment_currency(self) -> str:
+        value = await self._settings_repo.get_value(
+            SettingKey.PAYMENT_CURRENCY,
+            default=self._env_settings.payment_currency,
+        )
+        if isinstance(value, str) and value:
+            return value.upper()
+        return self._env_settings.payment_currency
+
     async def ensure_defaults(self) -> None:
         await self._settings_repo.upsert(
             SettingKey.SUBSCRIPTION_REQUIRED,
