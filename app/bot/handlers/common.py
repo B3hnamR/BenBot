@@ -181,13 +181,12 @@ def _format_orders_overview(orders: list[Order]) -> str:
     for order in orders[:10]:
         status = order.status.value.replace("_", " ").title()
         created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
-        lines.append(f"{status} · {order.total_amount} {order.currency} · created {created}")
+        lines.append(f"{status} - {order.total_amount} {order.currency} - created {created}")
     if len(orders) > 10:
-        lines.append("…")
+        lines.append("Showing the latest 10 orders.")
     lines.append("")
     lines.append("Select an order to view details.")
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 def _format_order_details(order: Order) -> str:
@@ -207,8 +206,7 @@ def _format_order_details(order: Order) -> str:
         lines.append("<b>Details</b>")
         for answer in order.answers:
             lines.append(f"{answer.question_key}: {answer.answer_text or '-'}")
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:
