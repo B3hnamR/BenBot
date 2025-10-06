@@ -175,6 +175,7 @@ async def _render_orders_overview(callback: CallbackQuery, session: AsyncSession
     await _safe_edit_message(callback.message, summary, reply_markup=reply_markup)
 
 
+
 def _format_orders_overview(orders: list[Order]) -> str:
     lines = ["<b>Your orders</b>"]
     for order in orders[:10]:
@@ -198,9 +199,7 @@ def _format_order_details(order: Order) -> str:
     if order.payment_expires_at:
         remaining = order.payment_expires_at - datetime.now(tz=timezone.utc)
         minutes = int(max(0, remaining.total_seconds()) // 60)
-        lines.append(
-            f"Payment deadline: {order.payment_expires_at:%Y-%m-%d %H:%M UTC}"
-        )
+        lines.append(f"Payment deadline: {order.payment_expires_at:%Y-%m-%d %H:%M UTC}")
         if minutes > 0:
             lines.append(f"Time remaining: ~{minutes} minutes")
     if order.answers:
