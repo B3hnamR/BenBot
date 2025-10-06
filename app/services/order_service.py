@@ -64,11 +64,15 @@ class OrderService:
         return order
 
     async def enforce_expiration(self, order: Order) -> Order:
-        if (
-            order.status == OrderStatus.AWAITING_PAYMENT
-            and order.payment_expires_at is not None
-            and order.payment_expires_at <= datetime.now(tz=timezone.utc)
-        ):
+        if order.status != OrderStatus.AWAITING_PAYMENT:
+            return order
+
+        expires_at = order.payment_expires_at
+        if expires_at is None:
+            return order
+
+        aware_expires_at = self._ensure_utc(expires_at)
+        if aware_expires_at <= datetime.now(tz=timezone.utc):
             order.status = OrderStatus.EXPIRED
         return order
 
@@ -78,3 +82,9 @@ class OrderService:
 
     async def mark_paid(self, order: Order, charge_id: str) -> Order:
         return await self._orders.mark_paid(order, charge_id=charge_id)
+
+    @staticmethod
+    def _ensure_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)

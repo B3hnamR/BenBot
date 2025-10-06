@@ -196,9 +196,10 @@ def _format_order_details(order: Order) -> str:
         f"Total: {order.total_amount} {order.currency}",
     ]
     if order.payment_expires_at:
-        remaining = order.payment_expires_at - datetime.now(tz=timezone.utc)
+        deadline = _ensure_utc(order.payment_expires_at)
+        remaining = deadline - datetime.now(tz=timezone.utc)
         minutes = int(max(0, remaining.total_seconds()) // 60)
-        lines.append(f"Payment deadline: {order.payment_expires_at:%Y-%m-%d %H:%M UTC}")
+        lines.append(f"Payment deadline: {deadline:%Y-%m-%d %H:%M UTC}")
         if minutes > 0:
             lines.append(f"Time remaining: ~{minutes} minutes")
     if order.answers:
@@ -216,6 +217,12 @@ async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:
         await message.edit_text(text, reply_markup=reply_markup)
     except Exception:
         await message.answer(text, reply_markup=reply_markup)
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _user_is_owner(user_id: int | None) -> bool:
