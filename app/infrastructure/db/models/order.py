@@ -18,7 +18,12 @@ class Order(IntPKMixin, TimestampMixin, Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
 
     status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus, native_enum=False, length=32),
+        Enum(
+            OrderStatus,
+            native_enum=False,
+            length=32,
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
         default=OrderStatus.DRAFT,
         nullable=False,
     )
