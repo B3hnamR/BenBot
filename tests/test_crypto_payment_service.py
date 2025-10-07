@@ -13,7 +13,7 @@ from app.infrastructure.db.models import Order, Product
 from app.infrastructure.db.repositories.user import UserRepository
 from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
-from app.services.oxapay_client import OxapayInvoice, OxapayPayment
+from app.services.oxapay_client import OxapayClient, OxapayInvoice, OxapayPayment
 from app.services.order_service import OrderService
 
 
@@ -172,3 +172,24 @@ async def test_refresh_updates_status_to_paid(session: AsyncSession) -> None:
     assert order.status is OrderStatus.PAID
     assert order.payment_charge_id == "hash123"
     assert order.extra_attrs[OXAPAY_EXTRA_KEY]["status"] == "paid"
+
+
+def test_prepare_params_converts_query_values() -> None:
+    params = OxapayClient._prepare_params(
+        {
+            "amount": 5,
+            "currency": "USD",
+            "mixed_payment": True,
+            "auto_withdrawal": False,
+            "optional": None,
+            "note": "test",
+        }
+    )
+
+    assert params == {
+        "amount": "5",
+        "currency": "USD",
+        "mixed_payment": "true",
+        "auto_withdrawal": "false",
+        "note": "test",
+    }

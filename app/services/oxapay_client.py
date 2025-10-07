@@ -53,7 +53,11 @@ class OxapayClient:
         self._timeout = timeout
 
     async def create_invoice(self, payload: dict[str, Any]) -> OxapayInvoice:
-        response = await self._request("POST", "/payment/create", json=payload)
+        response = await self._request(
+            "GET",
+            "/payment/create",
+            params=self._prepare_params(payload),
+        )
         data = response.get("data") or {}
         return self._parse_invoice(data)
 
@@ -79,8 +83,9 @@ class OxapayClient:
         headers = {
             "merchant_api_key": self._api_key,
             "Accept": "application/json",
-            "Content-Type": "application/json",
         }
+        if json is not None:
+            headers["Content-Type"] = "application/json"
         async with httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout,
@@ -98,6 +103,20 @@ class OxapayClient:
             message = content.get("message") or f"OxaPay request failed with status {response.status_code}"
             raise OxapayError(message, status_code=response.status_code, payload=content)
         return content
+
+    @staticmethod
+    def _prepare_params(payload: dict[str, Any]) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        for key, value in payload.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                params[key] = "true" if value else "false"
+            elif isinstance(value, (int, float)):
+                params[key] = str(value)
+            else:
+                params[key] = str(value)
+        return params
 
     @staticmethod
     def _parse_invoice(data: dict[str, Any]) -> OxapayInvoice:
