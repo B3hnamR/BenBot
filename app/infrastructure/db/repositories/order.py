@@ -95,3 +95,17 @@ class OrderRepository(BaseRepository):
         order.payment_charge_id = charge_id
         order.payment_expires_at = paid_at
         return order
+
+    async def merge_extra_attrs(self, order: Order, updates: dict) -> Order:
+        extra = dict(order.extra_attrs or {})
+        extra.update(updates)
+        order.extra_attrs = extra
+        return order
+
+    async def get_by_invoice_payload(self, payload: str) -> Order | None:
+        result = await self.session.execute(
+            select(Order)
+            .options(joinedload(Order.answers))
+            .where(Order.invoice_payload == payload)
+        )
+        return result.unique().scalar_one_or_none()

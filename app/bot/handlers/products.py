@@ -10,6 +10,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
@@ -31,6 +32,10 @@ from app.core.enums import OrderStatus, ProductQuestionType
 from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import UserRepository
 from app.services.config_service import ConfigService
+from app.services.crypto_payment_service import (
+    CryptoInvoiceResult,
+    CryptoPaymentService,
+)
 from app.services.order_service import OrderCreationError, OrderService
 from app.services.product_service import ProductService
 
@@ -192,6 +197,7 @@ async def collect_order_answer(message: Message, state: FSMContext) -> None:
             "key": question["key"],
             "prompt": question["prompt"],
             "value": answer_value,
+            "type": question["type"],
         }
     )
 
@@ -248,15 +254,23 @@ async def finalize_order(
         await callback.answer(str(exc), show_alert=True)
         return
 
+    crypto_service = CryptoPaymentService(session)
+    crypto_result = await crypto_service.create_invoice_for_order(
+        order,
+        description=f"{product.name} ({order.public_id})",
+        email=_extract_email_from_answers(answers),
+    )
+
     await state.clear()
 
     await _safe_edit_message(
         callback.message,
-        _order_confirmation_message(order, product_name, answers),
+        _order_confirmation_message(order, product_name, answers, crypto_result),
+        reply_markup=_order_confirmation_keyboard(crypto_result),
     )
     await callback.answer("Order created")
 
-    await _notify_admins_of_order(callback, order, product_name, answers)
+    await _notify_admins_of_order(callback, order, product_name, answers, crypto_result)
 
 
 @router.callback_query(OrderFlowState.confirm, F.data == ORDER_CANCEL_CALLBACK)
@@ -361,6 +375,7 @@ def _order_confirmation_message(
     order: Order,
     product_name: str,
     answers: list[dict[str, str | None]],
+    crypto: CryptoInvoiceResult | None,
 ) -> str:
     expires_text = ""
     if order.payment_expires_at:
@@ -379,6 +394,8 @@ def _order_confirmation_message(
         f"Status: {order.status.value.replace('_', ' ').title()}",
         f"Total: {order.total_amount} {order.currency}",
     ]
+    if order.invoice_payload:
+        lines.append(f"Payment reference: <code>{order.invoice_payload}</code>")
     if answers:
         lines.append("")
         lines.append("<b>Your details</b>")
@@ -386,6 +403,19 @@ def _order_confirmation_message(
             lines.append(f"{item['prompt']}: {item.get('value') or '-'}")
     if expires_text:
         lines.append(expires_text)
+    if crypto is not None:
+        if crypto.error:
+            lines.append("")
+            lines.append(f"⚠️ Crypto payment issue: {crypto.error}")
+        elif crypto.enabled:
+            lines.append("")
+            lines.append("<b>Pay with crypto</b>")
+            if crypto.pay_link:
+                lines.append(f'<a href="{crypto.pay_link}">Open crypto checkout</a>')
+            if crypto.track_id:
+                lines.append(f"Track ID: <code>{crypto.track_id}</code>")
+            if crypto.status:
+                lines.append(f"Last known status: {crypto.status}")
     lines.append("\nPlease follow the payment instructions provided by the team.")
     return "\n".join(lines)
 
@@ -400,6 +430,7 @@ async def _notify_admins_of_order(
     order: Order,
     product_name: str,
     answers: list[dict[str, str | None]],
+    crypto: CryptoInvoiceResult | None = None,
 ) -> None:
     settings = get_settings()
     if not settings.owner_user_ids:
@@ -413,11 +444,24 @@ async def _notify_admins_of_order(
         f"Total: {order.total_amount} {order.currency}",
         f"Status: {order.status.value}",
     ]
+    if order.invoice_payload:
+        lines.append(f"Reference: <code>{order.invoice_payload}</code>")
     if answers:
         lines.append("")
         lines.append("<b>Answers</b>")
         for item in answers:
             lines.append(f"{item['key']}: {item.get('value') or '-'}")
+    if crypto is not None:
+        lines.append("")
+        lines.append("<b>Crypto payment</b>")
+        if crypto.track_id:
+            lines.append(f"Track ID: {crypto.track_id}")
+        if crypto.pay_link:
+            lines.append(f"Link: {crypto.pay_link}")
+        if crypto.status:
+            lines.append(f"Status: {crypto.status}")
+        if crypto.error:
+            lines.append(f"Error: {crypto.error}")
 
     payload = "\n".join(lines)
     await asyncio.gather(
@@ -426,6 +470,30 @@ async def _notify_admins_of_order(
             for owner_id in settings.owner_user_ids
         ]
     )
+
+
+def _order_confirmation_keyboard(crypto: CryptoInvoiceResult | None):
+    if crypto is None or not crypto.enabled or not crypto.pay_link:
+        return None
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Pay with crypto", url=crypto.pay_link)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _extract_email_from_answers(answers: list[dict[str, str | None]]) -> str | None:
+    for item in answers:
+        value = (item.get("value") or "").strip()
+        if not value:
+            continue
+        if item.get("type") == ProductQuestionType.EMAIL.value:
+            return value
+        key = (item.get("key") or "").lower()
+        prompt = (item.get("prompt") or "").lower()
+        if "email" in key or "email" in prompt or re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+                return value
+    return None
 
 
 async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:

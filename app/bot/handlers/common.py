@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
@@ -26,6 +27,11 @@ from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import RequiredChannelRepository, UserRepository
 from app.services.container import membership_service
 from app.services.order_service import OrderService
+from app.services.crypto_payment_service import (
+    CryptoPaymentService,
+    CryptoSyncResult,
+    OXAPAY_EXTRA_KEY,
+)
 
 router = Router(name="common")
 
@@ -65,12 +71,15 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession) -> N
         await callback.answer("Order not found.", show_alert=True)
         return
 
+    crypto_service = CryptoPaymentService(session)
+    crypto_status = await crypto_service.refresh_order_status(order)
+
     await order_service.enforce_expiration(order)
 
     await _safe_edit_message(
         callback.message,
-        _format_order_details(order),
-        reply_markup=order_details_keyboard(order),
+        _format_order_details(order, crypto_status),
+        reply_markup=order_details_keyboard(order, pay_link=crypto_status.pay_link),
     )
     await callback.answer()
 
@@ -89,6 +98,10 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession) ->
     if order is None or order.user_id != profile.id:
         await callback.answer("Order not found.", show_alert=True)
         return
+
+    crypto_service = CryptoPaymentService(session)
+    await crypto_service.refresh_order_status(order)
+    await order_service.enforce_expiration(order)
 
     if order.status != OrderStatus.AWAITING_PAYMENT:
         await callback.answer("Order cannot be cancelled.", show_alert=True)
@@ -189,12 +202,14 @@ def _format_orders_overview(orders: list[Order]) -> str:
     return "\n".join(lines)
 
 
-def _format_order_details(order: Order) -> str:
+def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None = None) -> str:
     lines = [
         f"<b>Order {order.public_id}</b>",
         f"Status: {order.status.value.replace('_', ' ').title()}",
         f"Total: {order.total_amount} {order.currency}",
     ]
+    if order.invoice_payload:
+        lines.append(f"Payment reference: <code>{order.invoice_payload}</code>")
     if order.payment_expires_at:
         deadline = _ensure_utc(order.payment_expires_at)
         remaining = deadline - datetime.now(tz=timezone.utc)
@@ -207,6 +222,33 @@ def _format_order_details(order: Order) -> str:
         lines.append("<b>Details</b>")
         for answer in order.answers:
             lines.append(f"{answer.question_key}: {answer.answer_text or '-'}")
+
+    oxapay = _get_oxapay_payment(order)
+    pay_link = None
+    if crypto_status and crypto_status.pay_link:
+        pay_link = crypto_status.pay_link
+    elif oxapay.get("pay_link"):
+        pay_link = oxapay.get("pay_link")
+
+    if crypto_status and crypto_status.error:
+        lines.append("")
+        lines.append(f"⚠️ Crypto sync issue: {crypto_status.error}")
+
+    if oxapay or pay_link:
+        lines.append("")
+        lines.append("<b>Crypto payment</b>")
+        status_text = None
+        if crypto_status and crypto_status.status:
+            status_text = crypto_status.status
+        elif oxapay.get("status"):
+            status_text = oxapay["status"]
+        if status_text:
+            lines.append(f"Status: {status_text}")
+        if pay_link:
+            lines.append(f'<a href="{pay_link}">Open crypto checkout</a>')
+        if oxapay.get("updated_at"):
+            lines.append(f"Last update: {oxapay['updated_at']}")
+
     return "\n".join(lines)
 
 
@@ -230,3 +272,11 @@ def _user_is_owner(user_id: int | None) -> bool:
         return False
     settings = get_settings()
     return user_id in settings.owner_user_ids
+
+
+def _get_oxapay_payment(order: Order) -> dict[str, Any]:
+    extra = order.extra_attrs or {}
+    data = extra.get(OXAPAY_EXTRA_KEY)
+    if isinstance(data, dict):
+        return data
+    return {}

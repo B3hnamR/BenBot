@@ -9,6 +9,17 @@ class SettingKey(StrEnum):
     PAYMENT_PROVIDER_TOKEN = "payment.provider_token"
     PAYMENT_CURRENCY = "payment.currency"
     INVOICE_TIMEOUT_MINUTES = "payment.invoice_timeout_minutes"
+    PAYMENT_CRYPTO_ENABLED = "payment.crypto.enabled"
+    PAYMENT_CRYPTO_ALLOWED_CURRENCIES = "payment.crypto.allowed_currencies"
+    PAYMENT_CRYPTO_LIFETIME_MINUTES = "payment.crypto.lifetime_minutes"
+    PAYMENT_CRYPTO_MIXED_PAYMENT = "payment.crypto.mixed_payment"
+    PAYMENT_CRYPTO_FEE_PAYER = "payment.crypto.fee_payer"
+    PAYMENT_CRYPTO_UNDERPAID_COVERAGE = "payment.crypto.underpaid_coverage"
+    PAYMENT_CRYPTO_AUTO_WITHDRAWAL = "payment.crypto.auto_withdrawal"
+    PAYMENT_CRYPTO_TO_CURRENCY = "payment.crypto.to_currency"
+    PAYMENT_CRYPTO_RETURN_URL = "payment.crypto.return_url"
+    PAYMENT_CRYPTO_CALLBACK_URL = "payment.crypto.callback_url"
+    PAYMENT_CRYPTO_CALLBACK_SECRET = "payment.crypto.callback_secret"
 
 
 class OrderStatus(StrEnum):

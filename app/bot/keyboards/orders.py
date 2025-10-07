@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Iterable
 
 from aiogram.types import InlineKeyboardMarkup
@@ -37,10 +36,12 @@ def orders_list_keyboard(orders: Iterable[Order]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def order_details_keyboard(order: Order) -> InlineKeyboardMarkup:
+def order_details_keyboard(order: Order, pay_link: str | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    if pay_link:
+        builder.button(text="Open crypto checkout", url=pay_link)
     builder.button(
-        text="Refresh",
+        text="Refresh status",
         callback_data=f"{ORDER_VIEW_PREFIX}{order.public_id}",
     )
     if order.status == OrderStatus.AWAITING_PAYMENT:
@@ -62,4 +63,4 @@ def order_cancel_keyboard(callback_data: str) -> InlineKeyboardMarkup:
 
 def _order_summary_line(order: Order) -> str:
     status = order.status.value.replace("_", " ").title()
-    return f"{status} · {order.total_amount} {order.currency}" if order.total_amount is not None else status
+    return f"{status} - {order.total_amount} {order.currency}" if order.total_amount is not None else status
