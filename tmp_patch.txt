@@ -1,0 +1,42 @@
+*** Begin Patch
+*** Update File: tests/test_crypto_payment_service.py
+@@
+-def test_prepare_params_converts_query_values() -> None:
+-    params = OxapayClient._prepare_params(
+-        {
+-            "amount": 5,
+-            "currency": "USD",
+-            "mixed_payment": True,
+-            "auto_withdrawal": False,
+-            "optional": None,
+-            "note": "test",
+-        }
+-    )
+-
+-    assert params == {
+-        "amount": "5",
+-        "currency": "USD",
+-        "mixed_payment": "true",
+-        "auto_withdrawal": "false",
+-        "note": "test",
+-    }
++def test_normalise_payload_converts_values() -> None:
++    payload = OxapayClient._normalise_payload(
++        {
++            "amount": 5,
++            "currency": "USD",
++            "mixed_payment": True,
++            "auto_withdrawal": False,
++            "note": "test",
++            "optional": None,
++        }
++    )
++
++    assert payload == {
++        "amount": 5,
++        "currency": "USD",
++        "mixed_payment": True,
++        "auto_withdrawal": False,
++        "note": "test",
++    }
+*** End Patch

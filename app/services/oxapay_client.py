@@ -54,9 +54,9 @@ class OxapayClient:
 
     async def create_invoice(self, payload: dict[str, Any]) -> OxapayInvoice:
         response = await self._request(
-            "GET",
-            "/payment/create",
-            params=self._prepare_params(payload),
+            "POST",
+            "/payment/invoice",
+            json=self._normalise_payload(payload),
         )
         data = response.get("data") or {}
         return self._parse_invoice(data)
@@ -105,18 +105,20 @@ class OxapayClient:
         return content
 
     @staticmethod
-    def _prepare_params(payload: dict[str, Any]) -> dict[str, Any]:
-        params: dict[str, Any] = {}
+    def _normalise_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        from decimal import Decimal
+
+        cleaned: dict[str, Any] = {}
         for key, value in payload.items():
             if value is None:
                 continue
-            if isinstance(value, bool):
-                params[key] = "true" if value else "false"
-            elif isinstance(value, (int, float)):
-                params[key] = str(value)
+            if isinstance(value, Decimal):
+                cleaned[key] = float(value)
+            elif isinstance(value, (bool, int, float)):
+                cleaned[key] = value
             else:
-                params[key] = str(value)
-        return params
+                cleaned[key] = str(value)
+        return cleaned
 
     @staticmethod
     def _parse_invoice(data: dict[str, Any]) -> OxapayInvoice:

@@ -174,22 +174,22 @@ async def test_refresh_updates_status_to_paid(session: AsyncSession) -> None:
     assert order.extra_attrs[OXAPAY_EXTRA_KEY]["status"] == "paid"
 
 
-def test_prepare_params_converts_query_values() -> None:
-    params = OxapayClient._prepare_params(
+def test_normalise_payload_converts_values() -> None:
+    payload = OxapayClient._normalise_payload(
         {
             "amount": 5,
             "currency": "USD",
             "mixed_payment": True,
             "auto_withdrawal": False,
-            "optional": None,
             "note": "test",
+            "optional": None,
         }
     )
 
-    assert params == {
-        "amount": "5",
+    assert payload == {
+        "amount": 5,
         "currency": "USD",
-        "mixed_payment": "true",
-        "auto_withdrawal": "false",
+        "mixed_payment": True,
+        "auto_withdrawal": False,
         "note": "test",
     }
