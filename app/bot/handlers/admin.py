@@ -22,6 +22,7 @@ from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
+from app.services.order_fulfillment import ensure_fulfillment
 
 router = Router(name="admin")
 
@@ -155,6 +156,8 @@ async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSess
         result = await service.refresh_order_status(order)
         if result.updated:
             updated += 1
+        if order.status == OrderStatus.PAID:
+            await ensure_fulfillment(session, callback.bot, order, source="admin_sync")
 
     notice = f"Synced {len(orders)} invoice(s). Updated: {updated}."
     await _render_crypto_settings_message(callback.message, session, state, notice=notice)

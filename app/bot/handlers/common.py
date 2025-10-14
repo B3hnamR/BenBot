@@ -1,4 +1,4 @@
-﻿
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -27,6 +27,7 @@ from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import RequiredChannelRepository, UserRepository
 from app.services.container import membership_service
 from app.services.order_service import OrderService
+from app.services.order_fulfillment import ensure_fulfillment
 from app.services.crypto_payment_service import (
     CryptoPaymentService,
     CryptoSyncResult,
@@ -81,6 +82,10 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession) -> N
         _format_order_details(order, crypto_status),
         reply_markup=order_details_keyboard(order, pay_link=crypto_status.pay_link),
     )
+
+    if order.status == OrderStatus.PAID:
+        await ensure_fulfillment(session, callback.bot, order, source="user_view")
+
     await callback.answer()
 
 
@@ -280,3 +285,5 @@ def _get_oxapay_payment(order: Order) -> dict[str, Any]:
     if isinstance(data, dict):
         return data
     return {}
+
+

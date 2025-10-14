@@ -221,3 +221,45 @@ def test_normalise_payload_converts_values() -> None:
         "auto_withdrawal": False,
         "note": "test",
     }
+
+
+class StubBot:
+    def __init__(self) -> None:
+        self.messages: list[tuple[int, str]] = []
+
+    async def send_message(self, chat_id: int, text: str) -> None:
+        self.messages.append((chat_id, text))
+
+
+@pytest.mark.asyncio()
+async def test_ensure_fulfillment_marks_delivered(session: AsyncSession) -> None:
+    order = await _create_order(session)
+    service = await _prepare_crypto_service(session, api_key="token")
+
+    class StubClient:
+        async def create_invoice(self, payload: dict) -> OxapayInvoice:
+            return OxapayInvoice(
+                track_id="track123",
+                pay_link="https://pay.example/track123",
+                status="waiting",
+                amount=payload["amount"],
+                currency=payload["currency"],
+                expires_at=datetime.now(tz=timezone.utc),
+                data={"track_id": "track123", "pay_link": "https://pay.example/track123"},
+            )
+
+    service._get_client = lambda: StubClient()  # type: ignore[assignment]
+    await service.create_invoice_for_order(order, description="Test", email="buyer@example.com")
+
+    order.status = OrderStatus.PAID
+
+    from app.services.order_fulfillment import ensure_fulfillment
+
+    bot = StubBot()
+    delivered = await ensure_fulfillment(session, bot, order, source="test")
+
+    assert delivered is True
+    assert bot.messages
+    meta = order.extra_attrs.get(OXAPAY_EXTRA_KEY, {})
+    fulfillment = meta.get("fulfillment")
+    assert fulfillment is not None and fulfillment.get("delivered_at")
