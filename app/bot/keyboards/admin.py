@@ -32,6 +32,8 @@ class AdminCryptoCallback(StrEnum):
     SET_CALLBACK_URL = "admin:crypto:set_callback_url"
     SET_CALLBACK_SECRET = "admin:crypto:set_callback_secret"
     REFRESH_ACCEPTED = "admin:crypto:refresh"
+    VIEW_PENDING = "admin:crypto:view_pending"
+    SYNC_PENDING = "admin:crypto:sync_pending"
     BACK = "admin:crypto:back"
 
 
@@ -108,6 +110,14 @@ def crypto_settings_keyboard(config: "ConfigService.CryptoSettings") -> InlineKe
     builder.button(
         text="Show supported currencies",
         callback_data=AdminCryptoCallback.REFRESH_ACCEPTED.value,
+    )
+    builder.button(
+        text="View open invoices",
+        callback_data=AdminCryptoCallback.VIEW_PENDING.value,
+    )
+    builder.button(
+        text="Sync open invoices",
+        callback_data=AdminCryptoCallback.SYNC_PENDING.value,
     )
     builder.button(text="Back", callback_data=AdminCryptoCallback.BACK.value)
     builder.adjust(1)

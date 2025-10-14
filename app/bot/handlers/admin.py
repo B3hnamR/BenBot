@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import re
+from typing import Any
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -16,8 +17,11 @@ from app.bot.keyboards.admin import (
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.states.admin_crypto import AdminCryptoState
 from app.core.config import get_settings
+from app.core.enums import OrderStatus
+from app.infrastructure.db.models import Order
+from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.config_service import ConfigService
-from app.services.crypto_payment_service import CryptoPaymentService
+from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
 
 router = Router(name="admin")
 
@@ -121,6 +125,40 @@ async def handle_crypto_refresh_accepted(callback: CallbackQuery, session: Async
         notice = "Unable to fetch accepted currencies. Check API key or permissions."
     await _render_crypto_settings_message(callback.message, session, state, notice=notice)
     await callback.answer()
+
+
+@router.callback_query(F.data == AdminCryptoCallback.VIEW_PENDING.value)
+async def handle_crypto_view_pending(callback: CallbackQuery, session: AsyncSession) -> None:
+    repo = OrderRepository(session)
+    orders = await repo.list_pending_crypto(limit=10)
+    if not orders:
+        await callback.message.answer("No open crypto invoices.")
+        await callback.answer()
+        return
+
+    text = _format_pending_orders(orders)
+    await callback.message.answer(text, disable_web_page_preview=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminCryptoCallback.SYNC_PENDING.value)
+async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    repo = OrderRepository(session)
+    orders = await repo.list_pending_crypto(limit=10)
+    if not orders:
+        await callback.answer("No open invoices to sync.", show_alert=True)
+        return
+
+    service = CryptoPaymentService(session)
+    updated = 0
+    for order in orders:
+        result = await service.refresh_order_status(order)
+        if result.updated:
+            updated += 1
+
+    notice = f"Synced {len(orders)} invoice(s). Updated: {updated}."
+    await _render_crypto_settings_message(callback.message, session, state, notice=notice)
+    await callback.answer("Sync complete.")
 
 
 @router.callback_query(F.data == AdminCryptoCallback.SET_CURRENCIES.value)
@@ -403,7 +441,13 @@ async def _render_crypto_settings_message(
 ) -> None:
     config_service = ConfigService(session)
     config = await config_service.get_crypto_settings()
-    text = _format_crypto_settings_text(config, api_key_present=bool(get_settings().oxapay_api_key))
+    repo = OrderRepository(session)
+    stats = await repo.crypto_status_counts()
+    text = _format_crypto_settings_text(
+        config,
+        stats=stats,
+        api_key_present=bool(get_settings().oxapay_api_key),
+    )
     if notice:
         text = f"{notice}\n\n{text}"
     markup = crypto_settings_keyboard(config)
@@ -427,7 +471,13 @@ async def _update_crypto_settings_message_from_state(
     message_id = data.get("crypto_message_id")
     config_service = ConfigService(session)
     config = await config_service.get_crypto_settings()
-    text = _format_crypto_settings_text(config, api_key_present=bool(get_settings().oxapay_api_key))
+    repo = OrderRepository(session)
+    stats = await repo.crypto_status_counts()
+    text = _format_crypto_settings_text(
+        config,
+        stats=stats,
+        api_key_present=bool(get_settings().oxapay_api_key),
+    )
     if notice:
         text = f"{notice}\n\n{text}"
     markup = crypto_settings_keyboard(config)
@@ -446,9 +496,40 @@ async def _update_crypto_settings_message_from_state(
     await state.update_data(crypto_chat_id=target.chat.id, crypto_message_id=target.message_id)
 
 
+
+def _format_pending_orders(orders: list[Order]) -> str:
+    lines = ["<b>Open invoices (latest 10)</b>"]
+    for order in orders:
+        meta = _extract_oxapay_meta(order)
+        lines.append("")
+        lines.append(f"<code>{order.public_id}</code>")
+        lines.append(f"User ID: {order.user_id}")
+        lines.append(f"Total: {order.total_amount} {order.currency}")
+        if order.created_at:
+            lines.append(f"Created: {order.created_at:%Y-%m-%d %H:%M UTC}")
+        track_id = meta.get("track_id") or order.invoice_payload or "-"
+        lines.append(f"Track ID: {track_id}")
+        if order.payment_expires_at:
+            lines.append(f"Expires: {order.payment_expires_at:%Y-%m-%d %H:%M UTC}")
+        status = meta.get("status") or order.status.value
+        lines.append(f"Status: {status}")
+        if meta.get("updated_at"):
+            lines.append(f"Last update: {meta['updated_at']}")
+        if meta.get("pay_link"):
+            lines.append(f"Link: {meta['pay_link']}")
+    return "\n".join(lines)
+
+
+def _extract_oxapay_meta(order: Order) -> dict[str, Any]:
+    extra = order.extra_attrs or {}
+    meta = extra.get(OXAPAY_EXTRA_KEY)
+    return meta if isinstance(meta, dict) else {}
+
+
 def _format_crypto_settings_text(
     config: ConfigService.CryptoSettings,
     *,
+    stats: dict[OrderStatus, int],
     api_key_present: bool,
 ) -> str:
     lines = [
@@ -467,6 +548,20 @@ def _format_crypto_settings_text(
     lines.append(f"Return URL: {config.return_url or '-'}")
     lines.append(f"Callback URL: {config.callback_url or '-'}")
     lines.append(f"Callback secret: {'set' if config.callback_secret else '-'}")
+    if stats:
+        awaiting = stats.get(OrderStatus.AWAITING_PAYMENT, 0)
+        paid = stats.get(OrderStatus.PAID, 0)
+        expired = stats.get(OrderStatus.EXPIRED, 0)
+        cancelled = stats.get(OrderStatus.CANCELLED, 0)
+        lines.append("")
+        lines.append("<b>Invoice summary</b>")
+        lines.append(f"Awaiting payment: {awaiting}")
+        if paid:
+            lines.append(f"Paid recently: {paid}")
+        if expired:
+            lines.append(f"Expired: {expired}")
+        if cancelled:
+            lines.append(f"Cancelled: {cancelled}")
     lines.append("\nUse the buttons below to update settings.")
     return "\n".join(lines)
 

@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
 from app.core.enums import OrderStatus
@@ -109,3 +109,24 @@ class OrderRepository(BaseRepository):
             .where(Order.invoice_payload == payload)
         )
         return result.unique().scalar_one_or_none()
+
+    async def list_pending_crypto(self, limit: int = 10) -> list[Order]:
+        result = await self.session.execute(
+            select(Order)
+            .options(joinedload(Order.answers))
+            .where(
+                Order.status == OrderStatus.AWAITING_PAYMENT,
+                Order.invoice_payload.isnot(None),
+            )
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().unique().all())
+
+    async def crypto_status_counts(self) -> dict[OrderStatus, int]:
+        result = await self.session.execute(
+            select(Order.status, func.count())
+            .where(Order.invoice_payload.isnot(None))
+            .group_by(Order.status)
+        )
+        return {status: count for status, count in result.all()}
