@@ -174,6 +174,34 @@ async def test_refresh_updates_status_to_paid(session: AsyncSession) -> None:
     assert order.extra_attrs[OXAPAY_EXTRA_KEY]["status"] == "paid"
 
 
+@pytest.mark.asyncio()
+async def test_invalidate_invoice_clears_link(session: AsyncSession) -> None:
+    order = await _create_order(session)
+    service = await _prepare_crypto_service(session, api_key="token")
+
+    class StubClient:
+        async def create_invoice(self, payload: dict) -> OxapayInvoice:
+            return OxapayInvoice(
+                track_id="track123",
+                pay_link="https://pay.example/track123",
+                status="waiting",
+                amount=payload["amount"],
+                currency=payload["currency"],
+                expires_at=datetime.now(tz=timezone.utc),
+                data={"track_id": "track123", "pay_link": "https://pay.example/track123"},
+            )
+
+    service._get_client = lambda: StubClient()  # type: ignore[assignment]
+    await service.create_invoice_for_order(order, description="Test", email="buyer@example.com")
+
+    await service.invalidate_invoice(order, reason="cancelled")
+
+    assert order.invoice_payload is None
+    assert order.payment_provider is None
+    assert order.extra_attrs[OXAPAY_EXTRA_KEY]["pay_link"] is None
+    assert order.extra_attrs[OXAPAY_EXTRA_KEY]["status"] == "cancelled"
+
+
 def test_normalise_payload_converts_values() -> None:
     payload = OxapayClient._normalise_payload(
         {

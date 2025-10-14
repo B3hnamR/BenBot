@@ -38,7 +38,7 @@ def orders_list_keyboard(orders: Iterable[Order]) -> InlineKeyboardMarkup:
 
 def order_details_keyboard(order: Order, pay_link: str | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if pay_link:
+    if pay_link and order.status == OrderStatus.AWAITING_PAYMENT:
         builder.button(text="Open crypto checkout", url=pay_link)
     builder.button(
         text="Refresh status",

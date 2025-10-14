@@ -184,12 +184,17 @@ class CryptoPaymentService:
             await self._orders.mark_paid(order, charge_id=charge_id or track_id, paid_at=datetime.now(tz=timezone.utc))
         elif new_status == OrderStatus.EXPIRED:
             await self._orders.set_status(order, OrderStatus.EXPIRED)
+            pay_link = None
         elif new_status == OrderStatus.CANCELLED:
             await self._orders.set_status(order, OrderStatus.CANCELLED)
+            pay_link = None
         else:
             # Keep awaiting payment but update expiry timestamp.
             if payment.expired_at:
                 order.payment_expires_at = payment.expired_at
+
+        if order.status != OrderStatus.AWAITING_PAYMENT:
+            pay_link = None
 
         await self._orders.merge_extra_attrs(
             order,
@@ -221,6 +226,20 @@ class CryptoPaymentService:
             return await client.get_accepted_currencies()
         except OxapayError:
             return []
+
+    async def invalidate_invoice(self, order: Order, reason: str = "cancelled") -> None:
+        existing = (order.extra_attrs or {}).get(OXAPAY_EXTRA_KEY) or {}
+        existing.update(
+            {
+                "status": reason,
+                "pay_link": None,
+                "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+            }
+        )
+        await self._orders.merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: existing})
+        order.invoice_payload = None
+        order.payment_provider = None
+        order.payment_expires_at = None
 
     def _get_client(self) -> OxapayClient:
         return OxapayClient(
