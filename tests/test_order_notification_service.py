@@ -64,6 +64,14 @@ async def _create_order(session: AsyncSession) -> Order:
     return order
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def reset_owner_ids():
+    settings = get_settings()
+    original = list(settings.owner_user_ids)
+    yield
+    settings.owner_user_ids = original
+
+
 class StubBot:
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []

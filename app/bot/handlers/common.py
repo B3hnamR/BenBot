@@ -266,6 +266,25 @@ def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None =
         if oxapay.get("updated_at"):
             lines.append(f"Last update: {oxapay['updated_at']}")
 
+    fulfillment_meta = oxapay.get("fulfillment") if isinstance(oxapay, dict) else {}
+    if fulfillment_meta:
+        context = fulfillment_meta.get("context") or {}
+        actions = fulfillment_meta.get("actions") or []
+        lines.append("")
+        lines.append("<b>Fulfillment</b>")
+        if context.get("license_code"):
+            lines.append(f"License: <code>{context['license_code']}</code>")
+        if actions:
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                action_name = action.get("action", "?")
+                status = action.get("status", "?")
+                detail = action.get("detail")
+                lines.append(f"{action_name}: {status}")
+                if detail:
+                    lines.append(f" - {detail}")
+
     return "\n".join(lines)
 
 

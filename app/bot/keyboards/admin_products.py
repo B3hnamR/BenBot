@@ -85,6 +85,7 @@ def product_edit_fields_keyboard(product_id: int) -> InlineKeyboardMarkup:
         ("Inventory", "inventory"),
         ("Position", "position"),
         ("Delivery message", "delivery_note"),
+        ("Fulfillment plan (JSON)", "fulfillment_plan"),
     ]
     for label, field in fields:
         builder.button(

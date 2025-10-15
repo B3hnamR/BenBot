@@ -235,6 +235,12 @@ class StubBot:
 async def test_ensure_fulfillment_marks_delivered(session: AsyncSession) -> None:
     order = await _create_order(session)
     service = await _prepare_crypto_service(session, api_key="token")
+    order.product.extra_attrs = {
+        "fulfillment_plan": [
+            {"action": "generate_license", "prefix": "BEN-", "length": 8},
+            {"action": "send_text", "text": "Your license: {license_code}"},
+        ]
+    }
 
     class StubClient:
         async def create_invoice(self, payload: dict) -> OxapayInvoice:
@@ -259,10 +265,12 @@ async def test_ensure_fulfillment_marks_delivered(session: AsyncSession) -> None
     delivered = await ensure_fulfillment(session, bot, order, source="test")
 
     assert delivered is True
-    assert bot.messages
+    assert len(bot.messages) >= 2
     meta = order.extra_attrs.get(OXAPAY_EXTRA_KEY, {})
     fulfillment = meta.get("fulfillment")
     assert fulfillment is not None and fulfillment.get("delivered_at")
+    context = fulfillment.get("context") or {}
+    assert context.get("license_code", "").startswith("BEN-")
 
 
 @pytest.mark.asyncio()
@@ -270,6 +278,11 @@ async def test_ensure_fulfillment_updates_inventory(session: AsyncSession) -> No
     order = await _create_order(session)
     order.product.inventory = 1
     order.product.is_active = True
+    order.product.extra_attrs = {
+        "fulfillment_plan": [
+            {"action": "generate_license", "prefix": "BEN-", "length": 6},
+        ]
+    }
 
     from app.services.order_fulfillment import ensure_fulfillment
 
@@ -286,6 +299,8 @@ async def test_ensure_fulfillment_updates_inventory(session: AsyncSession) -> No
     assert inventory_meta.get("before") == 1
     assert inventory_meta.get("after") == 0
     assert inventory_meta.get("product_deactivated") is True
+    context = fulfillment.get("context") or {}
+    assert context.get("license_code")
 
     delivered_again = await ensure_fulfillment(session, bot, order, source="repeat")
     assert delivered_again is False

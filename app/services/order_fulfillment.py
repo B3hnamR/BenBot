@@ -11,6 +11,7 @@ from app.core.logging import get_logger
 from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
+from app.services.fulfillment_service import FulfillmentService
 from app.services.order_notification_service import OrderNotificationService
 
 
@@ -53,9 +54,15 @@ async def ensure_fulfillment(
 
     inventory_update = await _apply_inventory_adjustment(order)
 
-    await bot.send_message(user.telegram_id, _build_user_message(order, inventory_update))
+    fulfillment_service = FulfillmentService(session)
+    action_result = await fulfillment_service.execute(order, bot)
 
-    notification_extra = _inventory_admin_lines(inventory_update)
+    await bot.send_message(
+        user.telegram_id,
+        _build_user_message(order, inventory_update, action_result),
+    )
+
+    notification_extra = _inventory_admin_lines(inventory_update, action_result)
     notifications = OrderNotificationService(session)
     await notifications.notify_payment(
         bot,
@@ -71,6 +78,10 @@ async def ensure_fulfillment(
     })
     if inventory_update is not None:
         fulfillment["inventory"] = inventory_update.as_meta()
+    if action_result:
+        fulfillment["actions"] = action_result.get("actions", [])
+        fulfillment["context"] = action_result.get("context", {})
+        fulfillment["success"] = action_result.get("success", False)
     meta.update({"fulfillment": fulfillment})
 
     await OrderRepository(session).merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: meta})
@@ -90,7 +101,11 @@ def _get_payment_meta(order: Order) -> dict[str, Any]:
     return dict(meta) if isinstance(meta, dict) else {}
 
 
-def _build_user_message(order: Order, inventory_update: InventoryUpdate | None) -> str:
+def _build_user_message(
+    order: Order,
+    inventory_update: InventoryUpdate | None,
+    action_result: dict[str, Any] | None,
+) -> str:
     product_name = getattr(order.product, "name", "your purchase")
     lines = [
         "<b>Payment received!</b>",
@@ -110,20 +125,39 @@ def _build_user_message(order: Order, inventory_update: InventoryUpdate | None) 
     if delivery_note:
         lines.append("")
         lines.append(str(delivery_note))
+
+    context = (action_result or {}).get("context") or {}
+    license_code = context.get("license_code")
+    if license_code:
+        lines.append("")
+        lines.append(f"<b>Your license</b>: <code>{license_code}</code>")
+
     return "\n".join(lines)
 
 
-def _inventory_admin_lines(inventory_update: InventoryUpdate | None) -> list[str]:
+def _inventory_admin_lines(
+    inventory_update: InventoryUpdate | None,
+    action_result: dict[str, Any] | None,
+) -> list[str]:
     if inventory_update is None:
-        return []
-    lines: list[str] = []
-    if inventory_update.before is not None:
-        after_value = (
-            inventory_update.after if inventory_update.after is not None else "unknown"
-        )
-        lines.append(f"Inventory: {inventory_update.before} -> {after_value}")
-    if inventory_update.product_deactivated:
-        lines.append("Product was deactivated because inventory reached zero.")
+        lines: list[str] = []
+    else:
+        lines = []
+        if inventory_update.before is not None:
+            after_value = (
+                inventory_update.after if inventory_update.after is not None else "unknown"
+            )
+            lines.append(f"Inventory: {inventory_update.before} -> {after_value}")
+        if inventory_update.product_deactivated:
+            lines.append("Product was deactivated because inventory reached zero.")
+
+    context = (action_result or {}).get("context") or {}
+    if context.get("license_code"):
+        lines.append(f"License code: {context['license_code']}")
+
+    if action_result:
+        success = action_result.get("success")
+        lines.append(f"Fulfillment actions success: {'yes' if success else 'check logs'}")
     return lines
 
 

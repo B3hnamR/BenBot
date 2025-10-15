@@ -72,6 +72,15 @@ def _format_product_details(product) -> str:
         note = product.extra_attrs.get("delivery_note") or product.extra_attrs.get("delivery_message")
         if note:
             delivery_note = html.escape(str(note))
+    plan_summary = "-"
+    if isinstance(product.extra_attrs, dict):
+        plan = product.extra_attrs.get("fulfillment_plan")
+        if isinstance(plan, list) and plan:
+            actions = []
+            for step in plan:
+                if isinstance(step, dict):
+                    actions.append(str(step.get("action", "?")))
+            plan_summary = ", ".join(actions) if actions else "-"
 
     return (
         f"<b>{html.escape(product.name)}</b>\n"
@@ -82,6 +91,7 @@ def _format_product_details(product) -> str:
         f"<b>Summary</b>\n{summary}\n\n"
         f"<b>Description</b>\n{description}\n\n"
         f"<b>Delivery message</b>\n{delivery_note}\n\n"
+        f"<b>Fulfillment plan</b>\n{plan_summary}\n\n"
         f"Questions configured: {question_count}"
     )
 
@@ -166,6 +176,16 @@ def _field_prompt(field: str) -> str:
         "inventory": "Enter inventory quantity (integer). Send /skip for unlimited.",
         "position": "Enter display position (positive integer).",
         "delivery_note": "Enter the post-payment delivery message. Send /skip to clear it.",
+        "fulfillment_plan": (
+            "Send the fulfillment plan as JSON (list of actions). Supported actions: "
+            "'generate_license', 'send_text', 'send_file', 'webhook'."
+            "\nExample:"
+            "\n["
+            '\n  {"action": "generate_license", "prefix": "BEN-", "length": 12},'
+            '\n  {"action": "send_text", "text": "License: {license_code}"}'
+            "\n]"
+            "\nSend /skip to clear or /cancel to abort."
+        ),
     }
     try:
         return prompts[field]
@@ -214,6 +234,24 @@ def _parse_edit_value(field: str, value: str) -> tuple[object | None, bool]:
         if not normalized or _is_skip_message_value(normalized):
             return None, True
         return normalized, False
+
+    if field == "fulfillment_plan":
+        if not normalized or _is_skip_message_value(normalized):
+            return None, True
+        try:
+            import json
+
+            data = json.loads(normalized)
+        except Exception as exc:  # noqa: BLE001
+            raise ProductValidationError("Send a valid JSON structure.") from exc
+        if not isinstance(data, list):
+            raise ProductValidationError("Fulfillment plan must be a JSON list of actions.")
+        for item in data:
+            if not isinstance(item, dict):
+                raise ProductValidationError("Each fulfillment action must be a JSON object.")
+            if not item.get("action"):
+                raise ProductValidationError("Each fulfillment action needs an 'action' field.")
+        return data, False
 
     raise ProductValidationError("Unsupported field.")
 
