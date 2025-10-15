@@ -67,6 +67,11 @@ def _format_product_details(product) -> str:
     inventory = "Unlimited" if product.inventory is None else str(product.inventory)
     status = "Active" if product.is_active else "Inactive"
     question_count = len(product.questions or [])
+    delivery_note = "-"
+    if isinstance(product.extra_attrs, dict):
+        note = product.extra_attrs.get("delivery_note") or product.extra_attrs.get("delivery_message")
+        if note:
+            delivery_note = html.escape(str(note))
 
     return (
         f"<b>{html.escape(product.name)}</b>\n"
@@ -76,6 +81,7 @@ def _format_product_details(product) -> str:
         f"Position: {product.position}\n\n"
         f"<b>Summary</b>\n{summary}\n\n"
         f"<b>Description</b>\n{description}\n\n"
+        f"<b>Delivery message</b>\n{delivery_note}\n\n"
         f"Questions configured: {question_count}"
     )
 
@@ -159,6 +165,7 @@ def _field_prompt(field: str) -> str:
         "currency": "Enter currency code (3 letters).",
         "inventory": "Enter inventory quantity (integer). Send /skip for unlimited.",
         "position": "Enter display position (positive integer).",
+        "delivery_note": "Enter the post-payment delivery message. Send /skip to clear it.",
     }
     try:
         return prompts[field]
@@ -202,6 +209,11 @@ def _parse_edit_value(field: str, value: str) -> tuple[object | None, bool]:
         if not normalized:
             raise ProductValidationError("Position must be a positive integer.")
         return _parse_integer(normalized, allow_zero=False), False
+
+    if field == "delivery_note":
+        if not normalized or _is_skip_message_value(normalized):
+            return None, True
+        return normalized, False
 
     raise ProductValidationError("Unsupported field.")
 

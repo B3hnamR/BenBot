@@ -13,6 +13,7 @@ from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import OrderRepository
 from app.services.config_service import ConfigService
 from app.services.oxapay_client import OxapayClient, OxapayError, OxapayInvoice, OxapayPayment
+from app.core.logging import get_logger
 
 OXAPAY_EXTRA_KEY = "oxapay_payment"
 
@@ -45,6 +46,7 @@ class CryptoPaymentService:
         self._orders = OrderRepository(session)
         self._config_service = ConfigService(session)
         self._settings = get_settings()
+        self._log = get_logger(__name__)
 
     async def create_invoice_for_order(
         self,
@@ -53,22 +55,48 @@ class CryptoPaymentService:
         description: str | None = None,
         email: str | None = None,
     ) -> CryptoInvoiceResult:
+        self._log.info(
+            "oxapay_invoice_create_start",
+            order_id=order.id,
+            user_id=order.user_id,
+            amount=str(order.total_amount),
+            currency=order.currency,
+        )
         if not self._settings.oxapay_api_key:
+            self._log.warning(
+                "oxapay_api_key_missing",
+                order_id=order.id,
+            )
             return CryptoInvoiceResult(enabled=False, error="OxaPay API key is not configured.")
 
         crypto_config = await self._config_service.get_crypto_settings()
         if not crypto_config.enabled:
+            self._log.info(
+                "oxapay_disabled_in_config",
+                order_id=order.id,
+            )
             return CryptoInvoiceResult(enabled=False, error="Crypto payments are disabled.")
 
         try:
             client = self._get_client()
         except ValueError as exc:
+            self._log.error(
+                "oxapay_client_init_failed",
+                order_id=order.id,
+                error=str(exc),
+            )
             return CryptoInvoiceResult(enabled=False, error=str(exc))
 
         payload = self._build_invoice_payload(order, crypto_config, description=description, email=email)
         try:
             invoice: OxapayInvoice = await client.create_invoice(payload)
         except OxapayError as exc:
+            self._log.error(
+                "oxapay_invoice_create_failed",
+                order_id=order.id,
+                status_code=getattr(exc, "status_code", None),
+                error=str(exc),
+            )
             await self._orders.merge_extra_attrs(
                 order,
                 {
@@ -84,6 +112,11 @@ class CryptoPaymentService:
             )
 
         if not invoice.track_id:
+            self._log.error(
+                "oxapay_invoice_missing_track",
+                order_id=order.id,
+                response=invoice.data,
+            )
             await self._orders.merge_extra_attrs(
                 order,
                 {
@@ -102,6 +135,13 @@ class CryptoPaymentService:
             provider="oxapay",
             payload=str(invoice.track_id),
             expires_at=expires_at,
+        )
+        self._log.info(
+            "oxapay_invoice_created",
+            order_id=order.id,
+            track_id=invoice.track_id,
+            status=invoice.status,
+            expires_at=expires_at.isoformat() if expires_at else None,
         )
         await self._orders.merge_extra_attrs(
             order,
@@ -138,6 +178,10 @@ class CryptoPaymentService:
             )
 
         if not self._settings.oxapay_api_key:
+            self._log.warning(
+                "oxapay_api_key_missing",
+                order_id=order.id,
+            )
             return CryptoSyncResult(
                 updated=False,
                 status=None,
@@ -150,6 +194,11 @@ class CryptoPaymentService:
         try:
             client = self._get_client()
         except ValueError as exc:
+            self._log.error(
+                "oxapay_client_init_failed",
+                order_id=order.id,
+                error=str(exc),
+            )
             return CryptoSyncResult(
                 updated=False,
                 status=None,
@@ -162,6 +211,13 @@ class CryptoPaymentService:
         try:
             payment: OxapayPayment = await client.get_payment(track_id)
         except OxapayError as exc:
+            self._log.error(
+                "oxapay_payment_fetch_failed",
+                order_id=order.id,
+                track_id=track_id,
+                status_code=getattr(exc, "status_code", None),
+                error=str(exc),
+            )
             return CryptoSyncResult(
                 updated=False,
                 status=None,
@@ -178,7 +234,8 @@ class CryptoPaymentService:
             or self._current_pay_link(order)
         )
         new_status = self._map_oxapay_status(payment.status)
-        updated = new_status != order.status
+        previous_status = order.status
+        updated = new_status != previous_status
         if new_status == OrderStatus.PAID:
             charge_id = self._extract_charge_id(payment)
             await self._orders.mark_paid(order, charge_id=charge_id or track_id, paid_at=datetime.now(tz=timezone.utc))
@@ -208,6 +265,16 @@ class CryptoPaymentService:
                 }
             },
         )
+
+        if updated:
+            self._log.info(
+                "oxapay_status_changed",
+                order_id=order.id,
+                track_id=track_id,
+                from_status=previous_status.value,
+                to_status=new_status.value,
+                provider_status=payment.status,
+            )
 
         return CryptoSyncResult(
             updated=updated,

@@ -263,3 +263,29 @@ async def test_ensure_fulfillment_marks_delivered(session: AsyncSession) -> None
     meta = order.extra_attrs.get(OXAPAY_EXTRA_KEY, {})
     fulfillment = meta.get("fulfillment")
     assert fulfillment is not None and fulfillment.get("delivered_at")
+
+
+@pytest.mark.asyncio()
+async def test_ensure_fulfillment_updates_inventory(session: AsyncSession) -> None:
+    order = await _create_order(session)
+    order.product.inventory = 1
+    order.product.is_active = True
+
+    from app.services.order_fulfillment import ensure_fulfillment
+
+    bot = StubBot()
+    delivered = await ensure_fulfillment(session, bot, order, source="test")
+
+    assert delivered is True
+    assert order.product.inventory == 0
+    assert order.product.is_active is False
+
+    meta = order.extra_attrs.get(OXAPAY_EXTRA_KEY, {})
+    fulfillment = meta.get("fulfillment") or {}
+    inventory_meta = fulfillment.get("inventory") or {}
+    assert inventory_meta.get("before") == 1
+    assert inventory_meta.get("after") == 0
+    assert inventory_meta.get("product_deactivated") is True
+
+    delivered_again = await ensure_fulfillment(session, bot, order, source="repeat")
+    assert delivered_again is False

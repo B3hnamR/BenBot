@@ -37,6 +37,13 @@ class AdminCryptoCallback(StrEnum):
     BACK = "admin:crypto:back"
 
 
+class AdminOrderCallback(StrEnum):
+    TOGGLE_PAYMENT_ALERT = "admin:orders:toggle_payment"
+    TOGGLE_CANCEL_ALERT = "admin:orders:toggle_cancel"
+    TOGGLE_EXPIRE_ALERT = "admin:orders:toggle_expire"
+    BACK = "admin:orders:back"
+
+
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
@@ -120,5 +127,24 @@ def crypto_settings_keyboard(config: "ConfigService.CryptoSettings") -> InlineKe
         callback_data=AdminCryptoCallback.SYNC_PENDING.value,
     )
     builder.button(text="Back", callback_data=AdminCryptoCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"Payment alerts: {'ON' if config.notify_payment else 'OFF'}",
+        callback_data=AdminOrderCallback.TOGGLE_PAYMENT_ALERT.value,
+    )
+    builder.button(
+        text=f"Cancellation alerts: {'ON' if config.notify_cancellation else 'OFF'}",
+        callback_data=AdminOrderCallback.TOGGLE_CANCEL_ALERT.value,
+    )
+    builder.button(
+        text=f"Expiration alerts: {'ON' if config.notify_expiration else 'OFF'}",
+        callback_data=AdminOrderCallback.TOGGLE_EXPIRE_ALERT.value,
+    )
+    builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
     builder.adjust(1)
     return builder.as_markup()

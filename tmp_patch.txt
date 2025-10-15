@@ -1,67 +1,122 @@
 *** Begin Patch
-*** Update File: tests/test_crypto_payment_service.py
+*** Update File: app/services/crypto_payment_service.py
 @@
- async def test_refresh_updates_status_to_paid(session: AsyncSession) -> None:
-     order = await _create_order(session)
-     service = await _prepare_crypto_service(session, api_key="token")
+-        track_id = (order.invoice_payload or "").strip()
+-        if not track_id:
+-            return CryptoSyncResult(
++        track_id = (order.invoice_payload or "").strip()
++        log = self._log.bind(order_id=order.public_id, track_id=track_id or None)
++        if not track_id:
++            log.debug("crypto_invoice_sync_skipped", reason="missing_track_id")
++            return CryptoSyncResult(
+                 updated=False,
+                 status=None,
+                 order_status=order.status,
+                 pay_link=self._current_pay_link(order),
+                 expires_at=order.payment_expires_at,
+             )
  
-     order.invoice_payload = "track123"
+         if not self._settings.oxapay_api_key:
+-            return CryptoSyncResult(
++            log.warning("crypto_invoice_sync_skipped", reason="missing_api_key")
++            return CryptoSyncResult(
+                 updated=False,
+                 status=None,
+                 order_status=order.status,
+                 pay_link=self._current_pay_link(order),
+                 expires_at=order.payment_expires_at,
+                 error="OxaPay API key is not configured.",
+             )
+ 
+         try:
+             client = self._get_client()
+         except ValueError as exc:
++            log.error("crypto_invoice_sync_client_error", error=str(exc))
+             return CryptoSyncResult(
+                 updated=False,
+                 status=None,
+                 order_status=order.status,
+                 pay_link=self._current_pay_link(order),
 @@
-     assert order.payment_charge_id == "hash123"
-     assert order.extra_attrs[OXAPAY_EXTRA_KEY]["status"] == "paid"
- 
- 
--def test_normalise_payload_converts_query_values() -> None:
-+@pytest.mark.asyncio()
-+async def test_invalidate_invoice_clears_link(session: AsyncSession) -> None:
-+    order = await _create_order(session)
-+    service = await _prepare_crypto_service(session, api_key="token")
-+
-+    class StubClient:
-+        async def create_invoice(self, payload: dict) -> OxapayInvoice:
-+            return OxapayInvoice(
-+                track_id="track123",
-+                pay_link="https://pay.example/track123",
-+                status="waiting",
-+                amount=payload["amount"],
-+                currency=payload["currency"],
-+                expires_at=datetime.now(tz=timezone.utc),
-+                data={"track_id": "track123", "pay_link": "https://pay.example/track123"},
+-        try:
+-            payment: OxapayPayment = await client.get_payment(track_id)
+-        except OxapayError as exc:
+-            return CryptoSyncResult(
++        try:
++            payment: OxapayPayment = await client.get_payment(track_id)
++        except OxapayError as exc:
++            log.warning(
++                "crypto_invoice_sync_error",
++                error=str(exc),
++                status=exc.status_code,
++                response=exc.payload,
 +            )
-+
-+    service._get_client = lambda: StubClient()  # type: ignore[assignment]
-+    await service.create_invoice_for_order(order, description="Test", email="buyer@example.com")
-+
-+    await service.invalidate_invoice(order, reason="cancelled")
-+
-+    assert order.invoice_payload is None
-+    assert order.payment_provider is None
-+    assert order.extra_attrs[OXAPAY_EXTRA_KEY]["pay_link"] is None
-+    assert order.extra_attrs[OXAPAY_EXTRA_KEY]["status"] == "cancelled"
-+
-+
-+def test_normalise_payload_converts_values() -> None:
-     payload = OxapayClient._normalise_payload(
-         {
-             "amount": 5,
-             "currency": "USD",
-             "mixed_payment": True,
-             "auto_withdrawal": False,
-             "note": "test",
-             "optional": None,
-         }
-     )
++            return CryptoSyncResult(
+                 updated=False,
+                 status=None,
+                 order_status=order.status,
+                 pay_link=self._current_pay_link(order),
+                 expires_at=order.payment_expires_at,
+                 error=str(exc),
+             )
++        except Exception as exc:  # noqa: BLE001
++            log.exception("crypto_invoice_sync_exception", error=str(exc))
++            return CryptoSyncResult(
++                updated=False,
++                status=None,
++                order_status=order.status,
++                pay_link=self._current_pay_link(order),
++                expires_at=order.payment_expires_at,
++                error=str(exc),
++            )
  
-     assert payload == {
--        "amount": "5",
--        "currency": "USD",
--        "mixed_payment": "true",
--        "auto_withdrawal": "false",
--        "note": "test",
-+        "amount": 5,
-+        "currency": "USD",
-+        "mixed_payment": True,
-+        "auto_withdrawal": False,
-+        "note": "test",
-     }
+         pay_link = (
+             payment.data.get("pay_link")
+             or payment.data.get("payment_url")
+             or payment.data.get("link")
+             or self._current_pay_link(order)
+         )
+         new_status = self._map_oxapay_status(payment.status)
+         updated = new_status != order.status
+         if new_status == OrderStatus.PAID:
+             charge_id = self._extract_charge_id(payment)
+             await self._orders.mark_paid(order, charge_id=charge_id or track_id, paid_at=datetime.now(tz=timezone.utc))
++            log.info("crypto_invoice_sync_paid", charge_id=charge_id or track_id)
+         elif new_status == OrderStatus.EXPIRED:
+             await self._orders.set_status(order, OrderStatus.EXPIRED)
+             pay_link = None
++            log.info("crypto_invoice_sync_expired")
+         elif new_status == OrderStatus.CANCELLED:
+             await self._orders.set_status(order, OrderStatus.CANCELLED)
+             pay_link = None
++            log.info("crypto_invoice_sync_cancelled")
+         else:
+             # Keep awaiting payment but update expiry timestamp.
+             if payment.expired_at:
+                 order.payment_expires_at = payment.expired_at
++            log.debug("crypto_invoice_sync_waiting", status=payment.status)
+ 
+         if order.status != OrderStatus.AWAITING_PAYMENT:
+             pay_link = None
++            log.debug("crypto_invoice_sync_link_cleared", status=order.status.value)
+ 
+         await self._orders.merge_extra_attrs(
+             order,
+             {
+                 OXAPAY_EXTRA_KEY: {
+@@
+                 }
+             },
+         )
+ 
++        if updated:
++            log.info("crypto_invoice_status_updated", status=order.status.value)
++        else:
++            log.debug("crypto_invoice_status_unchanged", status=order.status.value)
++
+         return CryptoSyncResult(
+             updated=updated,
+             status=payment.status,
+             order_status=order.status,
+             pay_link=pay_link,
 *** End Patch

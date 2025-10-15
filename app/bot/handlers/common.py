@@ -28,6 +28,7 @@ from app.infrastructure.db.repositories import RequiredChannelRepository, UserRe
 from app.services.container import membership_service
 from app.services.order_service import OrderService
 from app.services.order_fulfillment import ensure_fulfillment
+from app.services.order_notification_service import OrderNotificationService
 from app.services.crypto_payment_service import (
     CryptoPaymentService,
     CryptoSyncResult,
@@ -75,7 +76,17 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession) -> N
     crypto_service = CryptoPaymentService(session)
     crypto_status = await crypto_service.refresh_order_status(order)
 
+    notifications = OrderNotificationService(session)
+    if crypto_status.updated:
+        if order.status == OrderStatus.CANCELLED:
+            await notifications.notify_cancelled(callback.bot, order, reason="provider_update")
+        elif order.status == OrderStatus.EXPIRED:
+            await notifications.notify_expired(callback.bot, order, reason="provider_update")
+
+    previous_status = order.status
     await order_service.enforce_expiration(order)
+    if order.status == OrderStatus.EXPIRED and previous_status != OrderStatus.EXPIRED:
+        await notifications.notify_expired(callback.bot, order, reason="timeout_check")
 
     await _safe_edit_message(
         callback.message,
@@ -113,6 +124,7 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession) ->
         return
 
     await order_service.mark_cancelled(order)
+    await OrderNotificationService(session).notify_cancelled(callback.bot, order, reason="user_cancelled")
     await _render_orders_overview(callback, session)
     await callback.answer("Order cancelled")
 

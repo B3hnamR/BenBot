@@ -29,6 +29,12 @@ class ConfigService:
         callback_url: str | None
         callback_secret: str | None
 
+    @dataclass
+    class AlertSettings:
+        notify_payment: bool
+        notify_cancellation: bool
+        notify_expiration: bool
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._settings_repo = SettingsRepository(session)
@@ -164,6 +170,27 @@ class ConfigService:
                 self._env_settings.oxapay_callback_secret or "",
             ),
         )
+        await self._settings_repo.upsert(
+            SettingKey.ALERT_ORDER_PAYMENT,
+            await self._ensure_bool_default(
+                SettingKey.ALERT_ORDER_PAYMENT,
+                True,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.ALERT_ORDER_CANCELLED,
+            await self._ensure_bool_default(
+                SettingKey.ALERT_ORDER_CANCELLED,
+                True,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.ALERT_ORDER_EXPIRED,
+            await self._ensure_bool_default(
+                SettingKey.ALERT_ORDER_EXPIRED,
+                True,
+            ),
+        )
 
         if self._env_settings.required_channels_default:
             existing = await self._channel_repo.list_active()
@@ -237,6 +264,52 @@ class ConfigService:
 
         for channel in channel_entities:
             await self._channel_repo.upsert(channel)
+
+    async def get_alert_settings(self) -> "ConfigService.AlertSettings":
+        payment = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.ALERT_ORDER_PAYMENT,
+                default=True,
+            ),
+            True,
+        )
+        cancellation = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.ALERT_ORDER_CANCELLED,
+                default=True,
+            ),
+            True,
+        )
+        expiration = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.ALERT_ORDER_EXPIRED,
+                default=True,
+            ),
+            True,
+        )
+        return self.AlertSettings(
+            notify_payment=payment,
+            notify_cancellation=cancellation,
+            notify_expiration=expiration,
+        )
+
+    async def save_alert_settings(
+        self,
+        config: "ConfigService.AlertSettings",
+    ) -> "ConfigService.AlertSettings":
+        await self._settings_repo.upsert(
+            SettingKey.ALERT_ORDER_PAYMENT,
+            bool(config.notify_payment),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.ALERT_ORDER_CANCELLED,
+            bool(config.notify_cancellation),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.ALERT_ORDER_EXPIRED,
+            bool(config.notify_expiration),
+        )
+        return await self.get_alert_settings()
 
     async def get_crypto_settings(self) -> CryptoSettings:
         enabled = self._to_bool(

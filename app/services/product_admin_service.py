@@ -103,6 +103,15 @@ class ProductAdminService:
                     current_slug=product.slug,
                 )
 
+        if "delivery_note" in fields:
+            note_value = fields["delivery_note"]
+            extras = dict(product.extra_attrs or {})
+            if note_value is None or note_value == "":
+                extras.pop("delivery_note", None)
+            else:
+                extras["delivery_note"] = str(note_value)
+            product.extra_attrs = extras or {}
+
         for attr in (
             "summary",
             "description",
@@ -110,7 +119,6 @@ class ProductAdminService:
             "currency",
             "inventory",
             "position",
-            "extra_attrs",
             "is_active",
         ):
             if attr in fields:

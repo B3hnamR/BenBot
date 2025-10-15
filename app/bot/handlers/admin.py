@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards.admin import (
     AdminCryptoCallback,
     AdminMenuCallback,
+    AdminOrderCallback,
     admin_menu_keyboard,
     crypto_settings_keyboard,
+    order_settings_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.states.admin_crypto import AdminCryptoState
@@ -23,6 +25,8 @@ from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
 from app.services.order_fulfillment import ensure_fulfillment
+from app.services.order_notification_service import OrderNotificationService
+from app.services.order_service import OrderService
 
 router = Router(name="admin")
 
@@ -37,6 +41,55 @@ async def handle_admin_menu(callback: CallbackQuery, session: AsyncSession) -> N
         reply_markup=admin_menu_keyboard(subscription_enabled=enabled),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == AdminMenuCallback.MANAGE_ORDERS.value)
+async def handle_manage_orders(callback: CallbackQuery, session: AsyncSession) -> None:
+    config_service = ConfigService(session)
+    alerts = await config_service.get_alert_settings()
+    await callback.message.edit_text(
+        _format_order_alerts_text(alerts),
+        reply_markup=order_settings_keyboard(alerts),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminOrderCallback.TOGGLE_PAYMENT_ALERT.value)
+async def handle_toggle_payment_alert(callback: CallbackQuery, session: AsyncSession) -> None:
+    config_service = ConfigService(session)
+    alerts = await config_service.get_alert_settings()
+    alerts.notify_payment = not alerts.notify_payment
+    alerts = await config_service.save_alert_settings(alerts)
+    notice = "Payment alerts enabled." if alerts.notify_payment else "Payment alerts disabled."
+    await _render_order_settings_message(callback.message, session, alerts=alerts, notice=notice)
+    await callback.answer("Payment alerts updated.")
+
+
+@router.callback_query(F.data == AdminOrderCallback.TOGGLE_CANCEL_ALERT.value)
+async def handle_toggle_cancel_alert(callback: CallbackQuery, session: AsyncSession) -> None:
+    config_service = ConfigService(session)
+    alerts = await config_service.get_alert_settings()
+    alerts.notify_cancellation = not alerts.notify_cancellation
+    alerts = await config_service.save_alert_settings(alerts)
+    notice = "Cancellation alerts enabled." if alerts.notify_cancellation else "Cancellation alerts disabled."
+    await _render_order_settings_message(callback.message, session, alerts=alerts, notice=notice)
+    await callback.answer("Cancellation alerts updated.")
+
+
+@router.callback_query(F.data == AdminOrderCallback.TOGGLE_EXPIRE_ALERT.value)
+async def handle_toggle_expire_alert(callback: CallbackQuery, session: AsyncSession) -> None:
+    config_service = ConfigService(session)
+    alerts = await config_service.get_alert_settings()
+    alerts.notify_expiration = not alerts.notify_expiration
+    alerts = await config_service.save_alert_settings(alerts)
+    notice = "Expiration alerts enabled." if alerts.notify_expiration else "Expiration alerts disabled."
+    await _render_order_settings_message(callback.message, session, alerts=alerts, notice=notice)
+    await callback.answer("Expiration alerts updated.")
+
+
+@router.callback_query(F.data == AdminOrderCallback.BACK.value)
+async def handle_orders_back(callback: CallbackQuery, session: AsyncSession) -> None:
+    await handle_admin_menu(callback, session)
 
 
 @router.callback_query(F.data == AdminMenuCallback.TOGGLE_SUBSCRIPTION.value)
@@ -151,13 +204,30 @@ async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSess
         return
 
     service = CryptoPaymentService(session)
+    order_service = OrderService(session)
+    notifications = OrderNotificationService(session)
     updated = 0
     for order in orders:
+        previous_status = order.status
         result = await service.refresh_order_status(order)
         if result.updated:
             updated += 1
+            if order.status == OrderStatus.CANCELLED:
+                await notifications.notify_cancelled(callback.bot, order, reason="provider_update")
+            elif order.status == OrderStatus.EXPIRED:
+                await notifications.notify_expired(callback.bot, order, reason="provider_update")
         if order.status == OrderStatus.PAID:
             await ensure_fulfillment(session, callback.bot, order, source="admin_sync")
+            continue
+
+        enforced_before = order.status
+        await order_service.enforce_expiration(order)
+        if (
+            order.status == OrderStatus.EXPIRED
+            and enforced_before != OrderStatus.EXPIRED
+            and previous_status != OrderStatus.EXPIRED
+        ):
+            await notifications.notify_expired(callback.bot, order, reason="admin_sync_timeout")
 
     notice = f"Synced {len(orders)} invoice(s). Updated: {updated}."
     await _render_crypto_settings_message(callback.message, session, state, notice=notice)
@@ -435,6 +505,25 @@ async def process_crypto_callback_secret(message: Message, session: AsyncSession
     await state.set_state(None)
 
 
+async def _render_order_settings_message(
+    message: Message,
+    session: AsyncSession,
+    *,
+    alerts: ConfigService.AlertSettings | None = None,
+    notice: str | None = None,
+) -> None:
+    config_service = ConfigService(session)
+    current = alerts or await config_service.get_alert_settings()
+    text = _format_order_alerts_text(current)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = order_settings_keyboard(current)
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await message.answer(text, reply_markup=markup)
+
+
 async def _render_crypto_settings_message(
     message: Message,
     session: AsyncSession,
@@ -566,6 +655,18 @@ def _format_crypto_settings_text(
         if cancelled:
             lines.append(f"Cancelled: {cancelled}")
     lines.append("\nUse the buttons below to update settings.")
+    return "\n".join(lines)
+
+
+def _format_order_alerts_text(alerts: ConfigService.AlertSettings) -> str:
+    lines = [
+        "<b>Order notification settings</b>",
+        f"Payment alerts: {'ON' if alerts.notify_payment else 'OFF'}",
+        f"Cancellation alerts: {'ON' if alerts.notify_cancellation else 'OFF'}",
+        f"Expiration alerts: {'ON' if alerts.notify_expiration else 'OFF'}",
+        "",
+        "These alerts send direct messages to the bot owners.",
+    ]
     return "\n".join(lines)
 
 
