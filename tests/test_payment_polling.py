@@ -46,6 +46,20 @@ class DummySessionFactory:
         pass
 
 
+class StubNotificationService:
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
+    async def notify_payment(self, *args, **kwargs) -> bool:
+        return True
+
+    async def notify_cancelled(self, *args, **kwargs) -> bool:
+        return False
+
+    async def notify_expired(self, *args, **kwargs) -> bool:
+        return False
+
+
 class StubCryptoService:
     def __init__(self, _session: AsyncSession) -> None:
         pass
@@ -101,6 +115,10 @@ async def test_poll_pending_orders_marks_paid(monkeypatch, session: AsyncSession
 
     monkeypatch.setattr("app.services.payment_polling.session_factory", lambda: DummySessionFactory(session))
     monkeypatch.setattr("app.services.payment_polling.CryptoPaymentService", StubCryptoService)
+    monkeypatch.setattr(
+        "app.services.payment_polling.OrderNotificationService",
+        lambda *args, **kwargs: StubNotificationService(),
+    )
 
     async def _fake_ensure(*_args, **_kwargs):
         return True

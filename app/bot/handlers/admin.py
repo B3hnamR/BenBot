@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from aiogram import F, Router
@@ -12,7 +13,8 @@ from app.bot.keyboards.admin import (
     AdminCryptoCallback,
     AdminMenuCallback,
     AdminOrderCallback,
-    ADMIN_ORDER_MARK_PREFIX,
+    ADMIN_ORDER_MARK_FULFILLED_PREFIX,
+    ADMIN_ORDER_MARK_PAID_PREFIX,
     ADMIN_ORDER_RECEIPT_PREFIX,
     ADMIN_ORDER_VIEW_PREFIX,
     admin_menu_keyboard,
@@ -108,9 +110,37 @@ async def handle_admin_order_view(callback: CallbackQuery, session: AsyncSession
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_PREFIX))
-async def handle_admin_order_mark(callback: CallbackQuery, session: AsyncSession) -> None:
-    public_id = callback.data.removeprefix(ADMIN_ORDER_MARK_PREFIX)
+@router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_PAID_PREFIX))
+async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_MARK_PAID_PREFIX)
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await callback.answer("Order not found.", show_alert=True)
+        await _render_recent_orders_message(callback.message, session, notice="Order removed.")
+        return
+    if order.status == OrderStatus.PAID:
+        await callback.answer("Order is already marked as paid.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+    if order.product is None:
+        await session.refresh(order, attribute_names=["product"])
+    if order.product is not None and not order.product.is_active:
+        await callback.answer("Product is not active.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+    charge_id = f"manual:{datetime.now(tz=timezone.utc).isoformat()}"
+    await order_service.mark_paid(order, charge_id=charge_id)
+    order.invoice_payload = None
+    order.payment_provider = "manual"
+    await ensure_fulfillment(session, callback.bot, order, source="admin_manual_paid")
+    await _render_admin_order_detail(callback.message, session, public_id, notice="Order marked as paid.")
+    await callback.answer("Order marked as paid.")
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_FULFILLED_PREFIX))
+async def handle_admin_order_mark_fulfilled(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_MARK_FULFILLED_PREFIX)
     order_service = OrderService(session)
     order = await order_service.get_order_by_public_id(public_id)
     if order is None:

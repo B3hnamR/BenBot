@@ -18,6 +18,7 @@ class AdminMenuCallback(StrEnum):
     MANAGE_CHANNELS = "admin:manage_channels"
     MANAGE_CRYPTO = "admin:manage_crypto"
     MANAGE_PRODUCTS = "admin:manage_products"
+    MANAGE_USERS = "admin:manage_users"
     MANAGE_ORDERS = "admin:manage_orders"
     BACK_TO_MAIN = "admin:back_to_main"
 
@@ -49,7 +50,8 @@ class AdminOrderCallback(StrEnum):
 
 
 ADMIN_ORDER_VIEW_PREFIX = "admin:orders:view:"
-ADMIN_ORDER_MARK_PREFIX = "admin:orders:mark:"
+ADMIN_ORDER_MARK_FULFILLED_PREFIX = "admin:orders:mark_fulfilled:"
+ADMIN_ORDER_MARK_PAID_PREFIX = "admin:orders:mark_paid:"
 ADMIN_ORDER_RECEIPT_PREFIX = "admin:orders:receipt:"
 
 
@@ -62,6 +64,7 @@ def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
     builder.button(text="Required channels", callback_data=AdminMenuCallback.MANAGE_CHANNELS.value)
     builder.button(text="Crypto payments", callback_data=AdminMenuCallback.MANAGE_CRYPTO.value)
     builder.button(text="Products", callback_data=AdminMenuCallback.MANAGE_PRODUCTS.value)
+    builder.button(text="Users", callback_data=AdminMenuCallback.MANAGE_USERS.value)
     builder.button(text="Orders", callback_data=AdminMenuCallback.MANAGE_ORDERS.value)
     builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
     builder.adjust(1)
@@ -179,12 +182,16 @@ def recent_orders_keyboard(orders: Sequence["Order"]) -> InlineKeyboardMarkup:
 
 def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    if order.status in {OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
+        builder.button(
+            text="Mark as paid",
+            callback_data=f"{ADMIN_ORDER_MARK_PAID_PREFIX}{order.public_id}",
+        )
     if order.status == OrderStatus.PAID:
         builder.button(
             text="Mark fulfilled",
-            callback_data=f"{ADMIN_ORDER_MARK_PREFIX}{order.public_id}",
+            callback_data=f"{ADMIN_ORDER_MARK_FULFILLED_PREFIX}{order.public_id}",
         )
-    if order.status == OrderStatus.PAID:
         builder.button(
             text="Send receipt",
             callback_data=f"{ADMIN_ORDER_RECEIPT_PREFIX}{order.public_id}",

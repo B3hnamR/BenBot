@@ -43,3 +43,21 @@ class UserRepository(BaseRepository):
             profile.language_code = language_code
             profile.last_seen_at = last_seen_at
         return profile
+
+    async def list_recent(self, limit: int = 20) -> list[UserProfile]:
+        result = await self.session.execute(
+            select(UserProfile)
+            .order_by(UserProfile.last_seen_at.desc().nullslast(), UserProfile.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def set_blocked(self, profile: UserProfile, blocked: bool) -> UserProfile:
+        profile.is_blocked = blocked
+        await self.session.flush()
+        return profile
+
+    async def update_notes(self, profile: UserProfile, notes: str | None) -> UserProfile:
+        profile.notes = notes
+        await self.session.flush()
+        return profile
