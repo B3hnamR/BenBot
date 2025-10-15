@@ -1,13 +1,14 @@
 ﻿from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
+    from app.infrastructure.db.models import Order
 
 
 class AdminMenuCallback(StrEnum):
@@ -41,7 +42,13 @@ class AdminOrderCallback(StrEnum):
     TOGGLE_PAYMENT_ALERT = "admin:orders:toggle_payment"
     TOGGLE_CANCEL_ALERT = "admin:orders:toggle_cancel"
     TOGGLE_EXPIRE_ALERT = "admin:orders:toggle_expire"
+    VIEW_RECENT = "admin:orders:view_recent"
     BACK = "admin:orders:back"
+
+
+ADMIN_ORDER_VIEW_PREFIX = "admin:orders:view:"
+ADMIN_ORDER_MARK_PREFIX = "admin:orders:mark:"
+ADMIN_ORDER_RECEIPT_PREFIX = "admin:orders:receipt:"
 
 
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
@@ -145,6 +152,39 @@ def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyb
         text=f"Expiration alerts: {'ON' if config.notify_expiration else 'OFF'}",
         callback_data=AdminOrderCallback.TOGGLE_EXPIRE_ALERT.value,
     )
+    builder.button(
+        text="Review recent orders",
+        callback_data=AdminOrderCallback.VIEW_RECENT.value,
+    )
     builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def recent_orders_keyboard(orders: Sequence["Order"]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        status = order.status.value.replace("_", " ").title()
+        amount = f"{order.total_amount} {order.currency}"
+        builder.button(
+            text=f"{status} • {amount}",
+            callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
+        )
+    builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Mark fulfilled",
+        callback_data=f"{ADMIN_ORDER_MARK_PREFIX}{order.public_id}",
+    )
+    builder.button(
+        text="Send receipt",
+        callback_data=f"{ADMIN_ORDER_RECEIPT_PREFIX}{order.public_id}",
+    )
+    builder.button(text="Back to orders", callback_data=AdminOrderCallback.VIEW_RECENT.value)
     builder.adjust(1)
     return builder.as_markup()

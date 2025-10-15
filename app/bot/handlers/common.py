@@ -13,6 +13,7 @@ from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.keyboards.orders import (
     ORDER_CANCEL_ORDER_PREFIX,
     ORDER_LIST_BACK_CALLBACK,
+    ORDER_REISSUE_PREFIX,
     ORDER_VIEW_PREFIX,
     order_details_keyboard,
     orders_list_keyboard,
@@ -26,6 +27,7 @@ from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import RequiredChannelRepository, UserRepository
 from app.services.container import membership_service
+from app.services.config_service import ConfigService
 from app.services.order_service import OrderService
 from app.services.order_fulfillment import ensure_fulfillment
 from app.services.order_notification_service import OrderNotificationService
@@ -127,6 +129,54 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession) ->
     await OrderNotificationService(session).notify_cancelled(callback.bot, order, reason="user_cancelled")
     await _render_orders_overview(callback, session)
     await callback.answer("Order cancelled")
+
+
+@router.callback_query(F.data.startswith(ORDER_REISSUE_PREFIX))
+async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ORDER_REISSUE_PREFIX)
+    user_repo = UserRepository(session)
+    profile = await user_repo.get_by_telegram_id(callback.from_user.id)
+    if profile is None:
+        await callback.answer("User profile not found.", show_alert=True)
+        return
+
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None or order.user_id != profile.id:
+        await callback.answer("Order not found.", show_alert=True)
+        return
+
+    if order.status not in {OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
+        await callback.answer("Order is not eligible for a new invoice.", show_alert=True)
+        return
+
+    product = order.product
+    if product is None or not product.is_active:
+        await callback.answer("Product is not available at this time.", show_alert=True)
+        return
+
+    crypto_service = CryptoPaymentService(session)
+    await crypto_service.invalidate_invoice(order, reason="reissued")
+
+    config_service = ConfigService(session)
+    invoice_timeout = await config_service.invoice_timeout_minutes()
+    try:
+        await order_service.reopen_for_payment(order, invoice_timeout_minutes=invoice_timeout)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    result = await crypto_service.create_invoice_for_order(order, description=f"Order {order.public_id}")
+    if result.error:
+        await callback.answer(result.error, show_alert=True)
+        return
+
+    await _safe_edit_message(
+        callback.message,
+        _format_order_details(order, None),
+        reply_markup=order_details_keyboard(order, pay_link=result.pay_link),
+    )
+    await callback.answer("New invoice created.")
 
 
 @router.callback_query(F.data == MainMenuCallback.SUPPORT.value)
@@ -239,6 +289,13 @@ def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None =
         lines.append("<b>Details</b>")
         for answer in order.answers:
             lines.append(f"{answer.question_key}: {answer.answer_text or '-'}")
+
+    if order.status == OrderStatus.CANCELLED:
+        lines.append("")
+        lines.append("This order was cancelled. Use the button below to create a fresh invoice when you're ready.")
+    elif order.status == OrderStatus.EXPIRED:
+        lines.append("")
+        lines.append("The invoice expired before payment. Tap the button to generate a new one.")
 
     oxapay = _get_oxapay_payment(order)
     pay_link = None

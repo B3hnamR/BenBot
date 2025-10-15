@@ -12,9 +12,14 @@ from app.bot.keyboards.admin import (
     AdminCryptoCallback,
     AdminMenuCallback,
     AdminOrderCallback,
+    ADMIN_ORDER_MARK_PREFIX,
+    ADMIN_ORDER_RECEIPT_PREFIX,
+    ADMIN_ORDER_VIEW_PREFIX,
     admin_menu_keyboard,
     crypto_settings_keyboard,
+    order_manage_keyboard,
     order_settings_keyboard,
+    recent_orders_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.states.admin_crypto import AdminCryptoState
@@ -85,6 +90,63 @@ async def handle_toggle_expire_alert(callback: CallbackQuery, session: AsyncSess
     notice = "Expiration alerts enabled." if alerts.notify_expiration else "Expiration alerts disabled."
     await _render_order_settings_message(callback.message, session, alerts=alerts, notice=notice)
     await callback.answer("Expiration alerts updated.")
+
+
+@router.callback_query(F.data == AdminOrderCallback.VIEW_RECENT.value)
+async def handle_orders_view_recent(callback: CallbackQuery, session: AsyncSession) -> None:
+    rendered = await _render_recent_orders_message(callback.message, session)
+    if not rendered:
+        await callback.answer("No recent orders found.", show_alert=True)
+    else:
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_VIEW_PREFIX))
+async def handle_admin_order_view(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_VIEW_PREFIX)
+    await _render_admin_order_detail(callback.message, session, public_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_PREFIX))
+async def handle_admin_order_mark(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_MARK_PREFIX)
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await callback.answer("Order not found.", show_alert=True)
+        await _render_recent_orders_message(callback.message, session, notice="Order removed.")
+        return
+    if order.status != OrderStatus.PAID:
+        await callback.answer("Order is not marked as paid yet.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+    delivered = await ensure_fulfillment(session, callback.bot, order, source="admin_manual")
+    if delivered:
+        await callback.answer("Fulfillment executed.")
+    else:
+        await callback.answer("Order was already fulfilled.", show_alert=True)
+    await _render_admin_order_detail(callback.message, session, public_id)
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_RECEIPT_PREFIX))
+async def handle_admin_order_receipt(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_RECEIPT_PREFIX)
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await callback.answer("Order not found.", show_alert=True)
+        await _render_recent_orders_message(callback.message, session, notice="Order removed.")
+        return
+    if order.user is None or order.user.telegram_id is None:
+        await callback.answer("User contact information is missing.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+
+    receipt_text = _format_order_receipt(order)
+    await callback.bot.send_message(order.user.telegram_id, receipt_text)
+    await callback.answer("Receipt sent to customer.")
+    await _render_admin_order_detail(callback.message, session, public_id)
 
 
 @router.callback_query(F.data == AdminOrderCallback.BACK.value)

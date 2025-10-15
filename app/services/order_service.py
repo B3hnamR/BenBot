@@ -83,6 +83,34 @@ class OrderService:
     async def mark_paid(self, order: Order, charge_id: str) -> Order:
         return await self._orders.mark_paid(order, charge_id=charge_id)
 
+    async def reopen_for_payment(
+        self,
+        order: Order,
+        *,
+        invoice_timeout_minutes: int,
+    ) -> Order:
+        if order.product is None:
+            await self._session.refresh(order, attribute_names=["product"])
+
+        product = order.product
+        if product is not None and not product.is_active:
+            raise OrderCreationError("Product is not active.")
+
+        expires_at: datetime | None = None
+        if invoice_timeout_minutes > 0:
+            expires_at = datetime.now(tz=timezone.utc) + timedelta(
+                minutes=invoice_timeout_minutes
+            )
+
+        order.status = OrderStatus.AWAITING_PAYMENT
+        order.payment_provider = None
+        order.payment_charge_id = None
+        order.invoice_payload = None
+        order.payment_expires_at = expires_at
+
+        await self._session.flush()
+        return order
+
     @staticmethod
     def _ensure_utc(value: datetime) -> datetime:
         if value.tzinfo is None:

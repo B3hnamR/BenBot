@@ -14,6 +14,7 @@ ORDER_CANCEL_CALLBACK = "order:cancel"
 ORDER_VIEW_PREFIX = "order:view:"
 ORDER_LIST_BACK_CALLBACK = "order:list_back"
 ORDER_CANCEL_ORDER_PREFIX = "order:cancel_order:"
+ORDER_REISSUE_PREFIX = "order:reissue:"
 
 
 def order_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -48,6 +49,11 @@ def order_details_keyboard(order: Order, pay_link: str | None = None) -> InlineK
         builder.button(
             text="Cancel order",
             callback_data=f"{ORDER_CANCEL_ORDER_PREFIX}{order.public_id}",
+        )
+    if order.status in {OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
+        builder.button(
+            text="Create new invoice",
+            callback_data=f"{ORDER_REISSUE_PREFIX}{order.public_id}",
         )
     builder.button(text="Back to orders", callback_data=ORDER_LIST_BACK_CALLBACK)
     builder.adjust(1)
