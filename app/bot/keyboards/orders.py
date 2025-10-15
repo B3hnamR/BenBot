@@ -5,6 +5,7 @@ from typing import Iterable
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.bot.keyboards.main_menu import MainMenuCallback
 from app.infrastructure.db.models import Order
 from app.core.enums import OrderStatus
 
@@ -33,6 +34,7 @@ def orders_list_keyboard(orders: Iterable[Order]) -> InlineKeyboardMarkup:
             callback_data=f"{ORDER_VIEW_PREFIX}{order.public_id}",
         )
     builder.button(text="Refresh", callback_data=ORDER_LIST_BACK_CALLBACK)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -56,6 +58,7 @@ def order_details_keyboard(order: Order, pay_link: str | None = None) -> InlineK
             callback_data=f"{ORDER_REISSUE_PREFIX}{order.public_id}",
         )
     builder.button(text="Back to orders", callback_data=ORDER_LIST_BACK_CALLBACK)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
     builder.adjust(1)
     return builder.as_markup()
 

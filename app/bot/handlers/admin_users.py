@@ -9,6 +9,7 @@ from app.bot.keyboards.admin import AdminMenuCallback
 from app.bot.keyboards.admin_users import (
     ADMIN_USER_BACK,
     ADMIN_USER_EDIT_NOTES_PREFIX,
+    ADMIN_USER_SEARCH,
     ADMIN_USER_TOGGLE_BLOCK_PREFIX,
     ADMIN_USER_VIEW_ORDERS_PREFIX,
     ADMIN_USER_VIEW_PREFIX,
@@ -16,7 +17,7 @@ from app.bot.keyboards.admin_users import (
     user_orders_keyboard,
     users_overview_keyboard,
 )
-from app.bot.states.admin_users import AdminUserNotesState
+from app.bot.states.admin_users import AdminUserState
 from app.infrastructure.db.models import Order, UserProfile
 from app.infrastructure.db.repositories import OrderRepository, UserRepository
 
@@ -32,6 +33,17 @@ async def handle_manage_users(callback: CallbackQuery, session: AsyncSession) ->
 @router.callback_query(F.data == ADMIN_USER_BACK)
 async def handle_users_back(callback: CallbackQuery, session: AsyncSession) -> None:
     await _render_users_overview(callback.message, session)
+    await callback.answer()
+
+
+@router.callback_query(F.data == ADMIN_USER_SEARCH)
+async def handle_user_search(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminUserState.searching)
+    await state.update_data(
+        list_chat_id=callback.message.chat.id,
+        list_message_id=callback.message.message_id,
+    )
+    await callback.message.answer("Enter the Telegram user ID (numeric). Send /cancel to abort.")
     await callback.answer()
 
 
@@ -70,7 +82,7 @@ async def handle_user_edit_notes(callback: CallbackQuery, state: FSMContext, ses
         await callback.answer("User not found.", show_alert=True)
         await _render_users_overview(callback.message, session)
         return
-    await state.set_state(AdminUserNotesState.editing)
+    await state.set_state(AdminUserState.editing_notes)
     await state.update_data(
         user_id=user_id,
         detail_chat_id=callback.message.chat.id,
@@ -83,7 +95,7 @@ async def handle_user_edit_notes(callback: CallbackQuery, state: FSMContext, ses
     await callback.answer()
 
 
-@router.message(AdminUserNotesState.editing)
+@router.message(AdminUserState.editing_notes)
 async def handle_user_notes_update(message: Message, state: FSMContext, session: AsyncSession) -> None:
     text = (message.text or "").strip()
     if text.lower() in {"/cancel", "cancel"}:
@@ -111,6 +123,37 @@ async def handle_user_notes_update(message: Message, state: FSMContext, session:
     detail_chat = data.get("detail_chat_id")
     detail_message = data.get("detail_message_id")
     target = (detail_chat, detail_message) if detail_chat and detail_message else None
+    await _render_user_detail(message, session, user, target=target)
+
+
+@router.message(AdminUserState.searching)
+async def handle_user_search_input(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    text = (message.text or "").strip()
+    if text.lower() in {"/cancel", "cancel"}:
+        await state.clear()
+        await message.answer("Search cancelled.")
+        return
+
+    try:
+        telegram_id = int(text)
+    except ValueError:
+        await message.answer("Provide a numeric Telegram user ID or /cancel.")
+        return
+
+    user_repo = UserRepository(session)
+    user = await user_repo.get_by_telegram_id(telegram_id)
+    data = await state.get_data()
+    list_chat = data.get("list_chat_id")
+    list_message = data.get("list_message_id")
+    target = (list_chat, list_message) if list_chat and list_message else None
+
+    if user is None:
+        await state.clear()
+        await message.answer("User not found.")
+        return
+
+    await state.clear()
+    await message.answer(f"User {telegram_id} found.")
     await _render_user_detail(message, session, user, target=target)
 
 
@@ -188,7 +231,7 @@ def _format_users_overview(users: list[UserProfile]) -> str:
         name = user.display_name()
         last_seen = user.last_seen_at.strftime("%Y-%m-%d %H:%M") if user.last_seen_at else "-"
         status = "BLOCKED" if user.is_blocked else "ACTIVE"
-        lines.append(f"{name} • {status} • last seen {last_seen}")
+        lines.append(f"{name} - {status} - last seen {last_seen}")
     lines.append("")
     lines.append("Select a user to view details.")
     return "\n".join(lines)
@@ -218,6 +261,6 @@ def _format_user_orders(user: UserProfile, orders: list[Order]) -> str:
     for order in orders:
         status = order.status.value.replace("_", " ").title()
         created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
-        lines.append(f"{status} • {order.total_amount} {order.currency} • {created}")
+        lines.append(f"{status} - {order.total_amount} {order.currency} - {created}")
     return "\n".join(lines)
 

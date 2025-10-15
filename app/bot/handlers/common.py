@@ -146,8 +146,7 @@ async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession) -
         await callback.answer("Order not found.", show_alert=True)
         return
 
-    if order.product is None:
-        await session.refresh(order, attribute_names=["product"])
+    await session.refresh(order, attribute_names=["product"])
 
     if order.status not in {OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
         await callback.answer("Order is not eligible for a new invoice.", show_alert=True)

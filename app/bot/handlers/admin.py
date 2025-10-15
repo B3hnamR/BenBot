@@ -7,7 +7,6 @@ from typing import Any
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.admin import (
@@ -670,9 +669,10 @@ async def _render_admin_order_detail(
         await _render_recent_orders_message(message, session, notice="Order no longer exists.")
         return
 
-    state = inspect(order)
-    if not state.attrs.user.loaded or not state.attrs.product.loaded:
+    try:
         await session.refresh(order, attribute_names=["user", "product"])
+    except Exception:
+        pass
 
     text = _format_admin_order_detail(order)
     if notice:
@@ -837,8 +837,8 @@ def _format_recent_orders_text(orders: list[Order]) -> str:
         created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
         product_name = getattr(order.product, "name", "-")
         amount = f"{order.total_amount} {order.currency}"
-        lines.append(f"{status} • {amount} • {product_name}")
-        lines.append(f"User: {order.user_id} • Public ID: <code>{order.public_id}</code> • Created: {created}")
+        lines.append(f"{status} - {amount} - {product_name}")
+        lines.append(f"User: {order.user_id} - Public ID: <code>{order.public_id}</code> - Created: {created}")
     lines.append("")
     lines.append("Select an order below to view details.")
     return "\n".join(lines)
