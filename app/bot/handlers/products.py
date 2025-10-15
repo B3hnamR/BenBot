@@ -474,9 +474,13 @@ async def _notify_admins_of_order(
 
 def _order_confirmation_keyboard(crypto: CryptoInvoiceResult | None):
     if crypto is None or not crypto.enabled or not crypto.pay_link:
-        return None
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
+        builder.adjust(1)
+        return builder.as_markup()
     builder = InlineKeyboardBuilder()
     builder.button(text="Pay with crypto", url=crypto.pay_link)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
     builder.adjust(1)
     return builder.as_markup()
 

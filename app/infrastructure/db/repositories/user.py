@@ -47,7 +47,11 @@ class UserRepository(BaseRepository):
     async def list_recent(self, limit: int = 20) -> list[UserProfile]:
         result = await self.session.execute(
             select(UserProfile)
-            .order_by(UserProfile.last_seen_at.desc().nullslast(), UserProfile.created_at.desc())
+            .order_by(
+                UserProfile.last_seen_at.is_(None),
+                UserProfile.last_seen_at.desc(),
+                UserProfile.created_at.desc(),
+            )
             .limit(limit)
         )
         return list(result.scalars().all())

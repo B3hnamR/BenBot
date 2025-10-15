@@ -52,9 +52,12 @@ def user_orders_keyboard(user_id: int, orders: Sequence[Order]) -> InlineKeyboar
     for order in orders:
         status = order.status.value.replace("_", " ").title()
         builder.button(
-            text=f"{status} • {order.total_amount} {order.currency}",
-            callback_data=f"{ADMIN_USER_VIEW_PREFIX}{user_id}",
+            text=f"{status} - {order.total_amount} {order.currency}",
+            callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
         )
     builder.button(text="Back", callback_data=f"{ADMIN_USER_VIEW_PREFIX}{user_id}")
+    builder.button(text="Back to users", callback_data=ADMIN_USER_BACK)
     builder.adjust(1)
     return builder.as_markup()
+
+

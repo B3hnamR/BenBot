@@ -7,6 +7,7 @@ from typing import Any
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.admin import (
@@ -121,6 +122,10 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         return
     if order.status == OrderStatus.PAID:
         await callback.answer("Order is already marked as paid.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+    if order.status not in {OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
+        await callback.answer("Order cannot be marked as paid in its current state.", show_alert=True)
         await _render_admin_order_detail(callback.message, session, public_id)
         return
     if order.product is None:
@@ -665,7 +670,8 @@ async def _render_admin_order_detail(
         await _render_recent_orders_message(message, session, notice="Order no longer exists.")
         return
 
-    if order.user is None or order.product is None:
+    state = inspect(order)
+    if not state.attrs.user.loaded or not state.attrs.product.loaded:
         await session.refresh(order, attribute_names=["user", "product"])
 
     text = _format_admin_order_detail(order)
