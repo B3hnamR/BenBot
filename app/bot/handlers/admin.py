@@ -123,10 +123,13 @@ async def handle_admin_order_mark(callback: CallbackQuery, session: AsyncSession
         return
     delivered = await ensure_fulfillment(session, callback.bot, order, source="admin_manual")
     if delivered:
+        notice = "Fulfillment executed successfully."
+        await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
         await callback.answer("Fulfillment executed.")
     else:
+        notice = "Order already fulfilled."
+        await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
         await callback.answer("Order was already fulfilled.", show_alert=True)
-    await _render_admin_order_detail(callback.message, session, public_id)
 
 
 @router.callback_query(F.data.startswith(ADMIN_ORDER_RECEIPT_PREFIX))
@@ -144,9 +147,15 @@ async def handle_admin_order_receipt(callback: CallbackQuery, session: AsyncSess
         return
 
     receipt_text = _format_order_receipt(order)
-    await callback.bot.send_message(order.user.telegram_id, receipt_text)
+    try:
+        await callback.bot.send_message(order.user.telegram_id, receipt_text)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"Failed to send receipt: {exc}", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+
+    await _render_admin_order_detail(callback.message, session, public_id, notice="Receipt sent to customer.")
     await callback.answer("Receipt sent to customer.")
-    await _render_admin_order_detail(callback.message, session, public_id)
 
 
 @router.callback_query(F.data == AdminOrderCallback.BACK.value)
@@ -586,6 +595,59 @@ async def _render_order_settings_message(
         await message.answer(text, reply_markup=markup)
 
 
+async def _render_recent_orders_message(
+    message: Message,
+    session: AsyncSession,
+    *,
+    notice: str | None = None,
+) -> bool:
+    repo = OrderRepository(session)
+    orders = await repo.list_recent(limit=10)
+    if not orders:
+        await _render_order_settings_message(
+            message,
+            session,
+            notice=notice or "No recent orders found.",
+        )
+        return False
+
+    text = _format_recent_orders_text(orders)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = recent_orders_keyboard(orders)
+    try:
+        await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+    return True
+
+
+async def _render_admin_order_detail(
+    message: Message,
+    session: AsyncSession,
+    public_id: str,
+    *,
+    notice: str | None = None,
+) -> None:
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await _render_recent_orders_message(message, session, notice="Order no longer exists.")
+        return
+
+    if order.user is None or order.product is None:
+        await session.refresh(order, attribute_names=["user", "product"])
+
+    text = _format_admin_order_detail(order)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = order_manage_keyboard(order)
+    try:
+        await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+
+
 async def _render_crypto_settings_message(
     message: Message,
     session: AsyncSession,
@@ -729,6 +791,106 @@ def _format_order_alerts_text(alerts: ConfigService.AlertSettings) -> str:
         "",
         "These alerts send direct messages to the bot owners.",
     ]
+    return "\n".join(lines)
+
+
+def _format_recent_orders_text(orders: list[Order]) -> str:
+    lines = ["<b>Recent orders</b>"]
+    for order in orders:
+        status = order.status.value.replace("_", " ").title()
+        created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
+        product_name = getattr(order.product, "name", "-")
+        amount = f"{order.total_amount} {order.currency}"
+        lines.append(f"{status} • {amount} • {product_name}")
+        lines.append(f"User: {order.user_id} • Public ID: <code>{order.public_id}</code> • Created: {created}")
+    lines.append("")
+    lines.append("Select an order below to view details.")
+    return "\n".join(lines)
+
+
+def _format_admin_order_detail(order: Order) -> str:
+    lines = [
+        f"<b>Order {order.public_id}</b>",
+        f"Status: {order.status.value.replace('_', ' ').title()}",
+        f"Total: {order.total_amount} {order.currency}",
+        f"User ID: {order.user_id}",
+    ]
+    if order.user:
+        lines.append(f"Customer: {order.user.display_name()} (telegram_id={order.user.telegram_id})")
+    if order.product:
+        lines.append(f"Product: {order.product.name}")
+    if order.created_at:
+        lines.append(f"Created: {order.created_at:%Y-%m-%d %H:%M:%S UTC}")
+    if order.updated_at:
+        lines.append(f"Updated: {order.updated_at:%Y-%m-%d %H:%M:%S UTC}")
+
+    if order.invoice_payload:
+        lines.append(f"Track/Invoice ID: {order.invoice_payload}")
+    if order.payment_provider:
+        lines.append(f"Provider: {order.payment_provider}")
+
+    oxapay_meta = _extract_oxapay_meta(order)
+    if oxapay_meta:
+        lines.append("")
+        lines.append("<b>Payment metadata</b>")
+        if oxapay_meta.get("status"):
+            lines.append(f"Provider status: {oxapay_meta.get('status')}")
+        if oxapay_meta.get("pay_link"):
+            lines.append(f"Link: {oxapay_meta.get('pay_link')}")
+        if oxapay_meta.get("updated_at"):
+            lines.append(f"Last sync: {oxapay_meta.get('updated_at')}")
+        if oxapay_meta.get("track_id"):
+            lines.append(f"Track ID: {oxapay_meta.get('track_id')}")
+
+    fulfillment = oxapay_meta.get("fulfillment") if isinstance(oxapay_meta, dict) else None
+    if fulfillment:
+        lines.append("")
+        lines.append("<b>Fulfillment</b>")
+        if fulfillment.get("delivered_at"):
+            lines.append(f"Delivered at: {fulfillment.get('delivered_at')}")
+        if fulfillment.get("delivered_by"):
+            lines.append(f"Source: {fulfillment.get('delivered_by')}")
+        context = fulfillment.get("context") or {}
+        if context.get("license_code"):
+            lines.append(f"License code: {context['license_code']}")
+        actions = fulfillment.get("actions") or []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            action_name = action.get("action", "?")
+            status = action.get("status", "?")
+            detail = action.get("detail")
+            lines.append(f"{action_name}: {status}")
+            if detail:
+                lines.append(f" - {detail}")
+            if action.get("error"):
+                lines.append(f" - error: {action['error']}")
+
+    return "\n".join(lines)
+
+
+def _format_order_receipt(order: Order) -> str:
+    lines = [
+        "<b>Payment receipt</b>",
+        f"Order: <code>{order.public_id}</code>",
+        f"Amount: {order.total_amount} {order.currency}",
+        f"Status: {order.status.value.replace('_', ' ').title()}",
+    ]
+    if order.product:
+        lines.append(f"Product: {order.product.name}")
+    if order.created_at:
+        lines.append(f"Created: {order.created_at:%Y-%m-%d %H:%M UTC}")
+    if order.updated_at:
+        lines.append(f"Updated: {order.updated_at:%Y-%m-%d %H:%M UTC}")
+    oxapay_meta = _extract_oxapay_meta(order)
+    if isinstance(oxapay_meta, dict):
+        fulfillment = oxapay_meta.get("fulfillment") or {}
+        context = fulfillment.get("context") or {}
+        if context.get("license_code"):
+            lines.append("")
+            lines.append(f"License code: <code>{context['license_code']}</code>")
+    lines.append("")
+    lines.append("Thank you for your purchase!")
     return "\n".join(lines)
 
 

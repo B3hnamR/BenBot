@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Sequence
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.core.enums import OrderStatus
+
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
     from app.infrastructure.db.models import Order
@@ -177,14 +179,16 @@ def recent_orders_keyboard(orders: Sequence["Order"]) -> InlineKeyboardMarkup:
 
 def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text="Mark fulfilled",
-        callback_data=f"{ADMIN_ORDER_MARK_PREFIX}{order.public_id}",
-    )
-    builder.button(
-        text="Send receipt",
-        callback_data=f"{ADMIN_ORDER_RECEIPT_PREFIX}{order.public_id}",
-    )
+    if order.status == OrderStatus.PAID:
+        builder.button(
+            text="Mark fulfilled",
+            callback_data=f"{ADMIN_ORDER_MARK_PREFIX}{order.public_id}",
+        )
+    if order.status == OrderStatus.PAID:
+        builder.button(
+            text="Send receipt",
+            callback_data=f"{ADMIN_ORDER_RECEIPT_PREFIX}{order.public_id}",
+        )
     builder.button(text="Back to orders", callback_data=AdminOrderCallback.VIEW_RECENT.value)
     builder.adjust(1)
     return builder.as_markup()

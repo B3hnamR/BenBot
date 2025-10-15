@@ -130,3 +130,16 @@ class OrderRepository(BaseRepository):
             .group_by(Order.status)
         )
         return {status: count for status, count in result.all()}
+
+    async def list_recent(self, limit: int = 10) -> list[Order]:
+        result = await self.session.execute(
+            select(Order)
+            .options(
+                joinedload(Order.answers),
+                joinedload(Order.user),
+                joinedload(Order.product),
+            )
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().unique().all())

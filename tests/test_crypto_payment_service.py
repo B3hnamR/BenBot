@@ -234,6 +234,7 @@ class StubBot:
 @pytest.mark.asyncio()
 async def test_ensure_fulfillment_marks_delivered(session: AsyncSession) -> None:
     order = await _create_order(session)
+    await session.refresh(order, attribute_names=["product", "user"])
     service = await _prepare_crypto_service(session, api_key="token")
     order.product.extra_attrs = {
         "fulfillment_plan": [
@@ -276,6 +277,7 @@ async def test_ensure_fulfillment_marks_delivered(session: AsyncSession) -> None
 @pytest.mark.asyncio()
 async def test_ensure_fulfillment_updates_inventory(session: AsyncSession) -> None:
     order = await _create_order(session)
+    await session.refresh(order, attribute_names=["product", "user"])
     order.product.inventory = 1
     order.product.is_active = True
     order.product.extra_attrs = {
