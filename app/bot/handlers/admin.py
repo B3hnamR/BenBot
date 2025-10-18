@@ -127,9 +127,9 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         await callback.answer("Order cannot be marked as paid in its current state.", show_alert=True)
         await _render_admin_order_detail(callback.message, session, public_id)
         return
-    if order.product is None:
-        await session.refresh(order, attribute_names=["product"])
-    if order.product is not None and not order.product.is_active:
+    await session.refresh(order, attribute_names=["product"])
+    product = order.product
+    if product is None or not product.is_active:
         await callback.answer("Product is not active.", show_alert=True)
         await _render_admin_order_detail(callback.message, session, public_id)
         return
@@ -155,6 +155,7 @@ async def handle_admin_order_mark_fulfilled(callback: CallbackQuery, session: As
         await callback.answer("Order is not marked as paid yet.", show_alert=True)
         await _render_admin_order_detail(callback.message, session, public_id)
         return
+    await session.refresh(order, attribute_names=["product", "user"])
     delivered = await ensure_fulfillment(session, callback.bot, order, source="admin_manual")
     if delivered:
         notice = "Fulfillment executed successfully."
