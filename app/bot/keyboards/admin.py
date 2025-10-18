@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.enums import OrderStatus
+from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
@@ -53,6 +54,7 @@ ADMIN_ORDER_VIEW_PREFIX = "admin:orders:view:"
 ADMIN_ORDER_MARK_FULFILLED_PREFIX = "admin:orders:mark_fulfilled:"
 ADMIN_ORDER_MARK_PAID_PREFIX = "admin:orders:mark_paid:"
 ADMIN_ORDER_RECEIPT_PREFIX = "admin:orders:receipt:"
+ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:orders:notify_delivered:"
 
 
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
@@ -187,11 +189,17 @@ def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
             text="Mark as paid",
             callback_data=f"{ADMIN_ORDER_MARK_PAID_PREFIX}{order.public_id}",
         )
-    if order.status == OrderStatus.PAID:
+    if order.status == OrderStatus.PAID and not _fulfillment_recorded(order):
         builder.button(
             text="Mark fulfilled",
             callback_data=f"{ADMIN_ORDER_MARK_FULFILLED_PREFIX}{order.public_id}",
         )
+    if order.status == OrderStatus.PAID and not _delivery_notice_sent(order):
+        builder.button(
+            text="Notify delivered",
+            callback_data=f"{ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX}{order.public_id}",
+        )
+    if order.status == OrderStatus.PAID:
         builder.button(
             text="Send receipt",
             callback_data=f"{ADMIN_ORDER_RECEIPT_PREFIX}{order.public_id}",
@@ -199,3 +207,19 @@ def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
     builder.button(text="Back to orders", callback_data=AdminOrderCallback.VIEW_RECENT.value)
     builder.adjust(1)
     return builder.as_markup()
+
+
+def _oxapay_meta(order: "Order") -> dict:
+    extra = order.extra_attrs or {}
+    meta = extra.get(OXAPAY_EXTRA_KEY)
+    return meta if isinstance(meta, dict) else {}
+
+
+def _fulfillment_recorded(order: "Order") -> bool:
+    fulfillment = _oxapay_meta(order).get("fulfillment")
+    return isinstance(fulfillment, dict) and bool(fulfillment.get("delivered_at"))
+
+
+def _delivery_notice_sent(order: "Order") -> bool:
+    delivery = _oxapay_meta(order).get("delivery_notice")
+    return isinstance(delivery, dict) and bool(delivery.get("sent_at"))

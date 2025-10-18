@@ -14,6 +14,7 @@ from app.bot.keyboards.admin import (
     AdminMenuCallback,
     AdminOrderCallback,
     ADMIN_ORDER_MARK_FULFILLED_PREFIX,
+    ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX,
     ADMIN_ORDER_MARK_PAID_PREFIX,
     ADMIN_ORDER_RECEIPT_PREFIX,
     ADMIN_ORDER_VIEW_PREFIX,
@@ -165,6 +166,60 @@ async def handle_admin_order_mark_fulfilled(callback: CallbackQuery, session: As
         notice = "Order already fulfilled."
         await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
         await callback.answer("Order was already fulfilled.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX))
+async def handle_admin_order_notify_delivered(callback: CallbackQuery, session: AsyncSession) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX)
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await callback.answer("Order not found.", show_alert=True)
+        await _render_recent_orders_message(callback.message, session, notice="Order removed.")
+        return
+
+    if order.status != OrderStatus.PAID:
+        await callback.answer("Order must be marked as paid first.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+
+    await session.refresh(order, attribute_names=["user", "product"])
+    if order.user is None or order.user.telegram_id is None:
+        await callback.answer("User contact information is missing.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+
+    meta = dict(_extract_oxapay_meta(order))
+    delivery_meta = meta.get("delivery_notice") if isinstance(meta, dict) else None
+    if isinstance(delivery_meta, dict) and delivery_meta.get("sent_at"):
+        await callback.answer("Delivery notice already sent.", show_alert=True)
+        await _render_admin_order_detail(callback.message, session, public_id)
+        return
+
+    message_text = _format_delivery_notice(order, meta=meta)
+    try:
+        sent_message = await callback.bot.send_message(order.user.telegram_id, message_text)
+    except Exception:
+        await callback.answer("Failed to notify the customer.", show_alert=True)
+        return
+
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+    delivery_record = {
+        "sent_at": timestamp,
+        "sent_by": "admin_manual_delivery",
+        "recipient": order.user.telegram_id,
+    }
+    if sent_message is not None:
+        delivery_record["message_id"] = sent_message.message_id
+
+    meta["delivery_notice"] = delivery_record
+    await OrderRepository(session).merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: meta})
+    order.extra_attrs = order.extra_attrs or {}
+    order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
+
+    notice = "Delivery notice sent to the customer."
+    await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
+    await callback.answer("Customer notified.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_ORDER_RECEIPT_PREFIX))
@@ -903,6 +958,32 @@ def _format_admin_order_detail(order: Order) -> str:
             if action.get("error"):
                 lines.append(f" - error: {action['error']}")
 
+    delivery_notice = oxapay_meta.get("delivery_notice")
+    if isinstance(delivery_notice, dict) and delivery_notice.get("sent_at"):
+        lines.append("")
+        lines.append("<b>Delivery notice</b>")
+        lines.append(f"Sent at: {delivery_notice.get('sent_at')}")
+        sender = delivery_notice.get("sent_by")
+        if sender:
+            lines.append(f"Source: {sender}")
+
+    return "\n".join(lines)
+
+
+def _format_delivery_notice(order: Order, *, meta: dict[str, Any]) -> str:
+    product_name = getattr(order.product, "name", "your purchase")
+    lines = [
+        "<b>Delivery update</b>",
+        f"Order <code>{order.public_id}</code> for {product_name} has been delivered.",
+    ]
+    fulfillment = meta.get("fulfillment") if isinstance(meta, dict) else None
+    context = (fulfillment or {}).get("context") or {}
+    license_code = context.get("license_code")
+    if license_code:
+        lines.append("")
+        lines.append(f"License code: <code>{license_code}</code>")
+    lines.append("")
+    lines.append("Thank you for your purchase! Let us know if you need anything else.")
     return "\n".join(lines)
 
 
