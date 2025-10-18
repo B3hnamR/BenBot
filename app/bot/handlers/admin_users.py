@@ -153,8 +153,11 @@ async def handle_user_search_input(message: Message, state: FSMContext, session:
         return
 
     await state.clear()
-    await message.answer(f"User {telegram_id} found.")
     await _render_user_detail(message, session, user, target=target)
+    if target:
+        detail_text = _format_user_detail(user)
+        markup = user_detail_keyboard(user)
+        await message.answer(detail_text, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith(ADMIN_USER_VIEW_ORDERS_PREFIX))

@@ -14,7 +14,6 @@ ADMIN_USER_EDIT_NOTES_PREFIX = "admin:user:notes:"
 ADMIN_USER_VIEW_ORDERS_PREFIX = "admin:user:orders:"
 ADMIN_USER_BACK = "admin:user:back"
 ADMIN_USER_SEARCH = "admin:user:search"
-ADMIN_USER_SEARCH = "admin:user:search"
 
 
 def users_overview_keyboard(users: Sequence[UserProfile]) -> InlineKeyboardMarkup:
@@ -25,7 +24,6 @@ def users_overview_keyboard(users: Sequence[UserProfile]) -> InlineKeyboardMarku
             text=label,
             callback_data=f"{ADMIN_USER_VIEW_PREFIX}{user.id}",
         )
-    builder.button(text="Search user", callback_data=ADMIN_USER_SEARCH)
     builder.button(text="Search user", callback_data=ADMIN_USER_SEARCH)
     builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
     builder.adjust(1)
