@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.keyboards.admin import order_manage_keyboard
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.keyboards.orders import (
     ORDER_CANCEL_CALLBACK,
@@ -464,12 +465,17 @@ async def _notify_admins_of_order(
             lines.append(f"Error: {crypto.error}")
 
     payload = "\n".join(lines)
-    await asyncio.gather(
-        *[
-            callback.bot.send_message(owner_id, payload)
-            for owner_id in settings.owner_user_ids
-        ]
-    )
+    tasks = []
+    for owner_id in settings.owner_user_ids:
+        tasks.append(
+            callback.bot.send_message(
+                owner_id,
+                payload,
+                reply_markup=order_manage_keyboard(order),
+                disable_web_page_preview=True,
+            )
+        )
+    await asyncio.gather(*tasks)
 
 
 def _order_confirmation_keyboard(crypto: CryptoInvoiceResult | None):
