@@ -54,7 +54,7 @@ ADMIN_ORDER_VIEW_PREFIX = "admin:orders:view:"
 ADMIN_ORDER_MARK_FULFILLED_PREFIX = "admin:orders:mark_fulfilled:"
 ADMIN_ORDER_MARK_PAID_PREFIX = "admin:orders:mark_paid:"
 ADMIN_ORDER_RECEIPT_PREFIX = "admin:orders:receipt:"
-ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:orders:notify_delivered:"
+ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:ord:delv:"
 
 
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
