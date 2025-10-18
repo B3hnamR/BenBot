@@ -5,7 +5,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order, OrderAnswer
@@ -55,7 +55,10 @@ class OrderRepository(BaseRepository):
     async def list_for_user(self, user_id: int) -> list[Order]:
         result = await self.session.execute(
             select(Order)
-            .options(joinedload(Order.answers))
+            .options(
+                joinedload(Order.answers),
+                selectinload(Order.product),
+            )
             .where(Order.user_id == user_id)
             .order_by(Order.created_at.desc())
         )
@@ -64,7 +67,11 @@ class OrderRepository(BaseRepository):
     async def get_by_public_id(self, public_id: str) -> Order | None:
         result = await self.session.execute(
             select(Order)
-            .options(joinedload(Order.answers))
+            .options(
+                joinedload(Order.answers),
+                joinedload(Order.product),
+                joinedload(Order.user),
+            )
             .where(Order.public_id == public_id)
         )
         return result.unique().scalar_one_or_none()
@@ -105,7 +112,11 @@ class OrderRepository(BaseRepository):
     async def get_by_invoice_payload(self, payload: str) -> Order | None:
         result = await self.session.execute(
             select(Order)
-            .options(joinedload(Order.answers))
+            .options(
+                joinedload(Order.answers),
+                joinedload(Order.product),
+                joinedload(Order.user),
+            )
             .where(Order.invoice_payload == payload)
         )
         return result.unique().scalar_one_or_none()
