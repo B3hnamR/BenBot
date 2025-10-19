@@ -45,6 +45,7 @@ class Order(IntPKMixin, TimestampMixin, Base):
         back_populates="order",
         cascade="all, delete-orphan",
     )
+    support_tickets: Mapped[list["SupportTicket"]] = relationship("SupportTicket", back_populates="order")
 
 
 class OrderAnswer(IntPKMixin, TimestampMixin, Base):

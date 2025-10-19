@@ -64,6 +64,18 @@ class OrderRepository(BaseRepository):
         )
         return list(result.scalars().unique().all())
 
+    async def get_by_id(self, order_id: int) -> Order | None:
+        result = await self.session.execute(
+            select(Order)
+            .options(
+                joinedload(Order.user),
+                joinedload(Order.product),
+                joinedload(Order.answers),
+            )
+            .where(Order.id == order_id)
+        )
+        return result.unique().scalar_one_or_none()
+
     async def paginate_user_orders(
         self,
         user_id: int,

@@ -68,6 +68,12 @@ class UserRepository(BaseRepository):
         has_more = len(users) > limit
         return users[:limit], has_more
 
+    async def get_by_id(self, user_id: int) -> UserProfile | None:
+        result = await self.session.execute(
+            select(UserProfile).where(UserProfile.id == user_id)
+        )
+        return result.scalar_one_or_none()
+
     async def set_blocked(self, profile: UserProfile, blocked: bool) -> UserProfile:
         profile.is_blocked = blocked
         await self.session.flush()

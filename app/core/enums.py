@@ -46,3 +46,24 @@ class MembershipStatus(IntEnum):
     UNKNOWN = 0
     MEMBER = 1
     NOT_MEMBER = 2
+
+
+class SupportTicketStatus(StrEnum):
+    OPEN = "open"
+    AWAITING_USER = "awaiting_user"
+    AWAITING_ADMIN = "awaiting_admin"
+    RESOLVED = "resolved"
+    ARCHIVED = "archived"
+
+
+class SupportTicketPriority(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class SupportAuthorRole(StrEnum):
+    USER = "user"
+    ADMIN = "admin"
+    SYSTEM = "system"

@@ -9,6 +9,7 @@ from app.bot.keyboards.main_menu import MainMenuCallback
 from app.infrastructure.db.models import Order
 from app.core.enums import OrderStatus
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
+from app.bot.keyboards.support import SUPPORT_ORDER_CREATE_PREFIX
 
 
 ORDER_CONFIRM_CALLBACK = "order:confirm"
@@ -74,6 +75,7 @@ def order_details_keyboard(
     pay_link: str | None = None,
     *,
     page: int | None = None,
+    include_support_button: bool = True,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if pay_link and order.status == OrderStatus.AWAITING_PAYMENT:
@@ -91,6 +93,11 @@ def order_details_keyboard(
         builder.button(
             text="Create new invoice",
             callback_data=f"{ORDER_REISSUE_PREFIX}{order.public_id}",
+        )
+    if include_support_button:
+        builder.button(
+            text="Need help with this order",
+            callback_data=f"{SUPPORT_ORDER_CREATE_PREFIX}{order.public_id}",
         )
     back_callback = (
         f"{ORDER_LIST_PAGE_PREFIX}{max(page or 0, 0)}"

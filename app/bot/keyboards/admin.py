@@ -19,6 +19,7 @@ class AdminMenuCallback(StrEnum):
     MANAGE_CHANNELS = "admin:manage_channels"
     MANAGE_CRYPTO = "admin:manage_crypto"
     MANAGE_PAYMENTS = "admin:manage_payments"
+    MANAGE_SUPPORT = "admin:manage_support"
     MANAGE_PRODUCTS = "admin:manage_products"
     MANAGE_USERS = "admin:manage_users"
     MANAGE_ORDERS = "admin:manage_orders"
@@ -68,6 +69,7 @@ def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
     builder.button(text="Required channels", callback_data=AdminMenuCallback.MANAGE_CHANNELS.value)
     builder.button(text="Crypto payments", callback_data=AdminMenuCallback.MANAGE_CRYPTO.value)
     builder.button(text="Payments dashboard", callback_data=AdminMenuCallback.MANAGE_PAYMENTS.value)
+    builder.button(text="Support desk", callback_data=AdminMenuCallback.MANAGE_SUPPORT.value)
     builder.button(text="Products", callback_data=AdminMenuCallback.MANAGE_PRODUCTS.value)
     builder.button(text="Users", callback_data=AdminMenuCallback.MANAGE_USERS.value)
     builder.button(text="Orders", callback_data=AdminMenuCallback.MANAGE_ORDERS.value)

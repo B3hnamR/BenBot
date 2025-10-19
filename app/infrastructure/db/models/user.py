@@ -21,6 +21,7 @@ class UserProfile(IntPKMixin, TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(String(length=512))
 
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="user")
+    support_tickets: Mapped[list["SupportTicket"]] = relationship("SupportTicket", back_populates="user")
 
     def display_name(self) -> str:
         if self.first_name and self.last_name:

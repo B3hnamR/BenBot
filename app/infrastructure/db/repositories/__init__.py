@@ -4,6 +4,7 @@ from .order import OrderRepository
 from .product import ProductRepository
 from .product_question import ProductQuestionRepository
 from .settings import SettingsRepository
+from .support import SupportRepository
 from .user import UserRepository
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "ProductQuestionRepository",
     "RequiredChannelRepository",
     "SettingsRepository",
+    "SupportRepository",
     "UserRepository",
 ]

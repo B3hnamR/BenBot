@@ -211,16 +211,6 @@ async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession, s
     await callback.answer("New invoice created.")
 
 
-@router.callback_query(F.data == MainMenuCallback.SUPPORT.value)
-async def handle_support(callback: CallbackQuery) -> None:
-    await _safe_edit_message(
-        callback.message,
-        "Support center is under construction. Use this menu later to raise tickets or chat with the team.",
-        reply_markup=main_menu_keyboard(show_admin=_user_is_owner(callback.from_user.id)),
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data == SUBSCRIPTION_REFRESH_CALLBACK)
 async def handle_subscription_refresh(callback: CallbackQuery, session: AsyncSession) -> None:
     channel_repo = RequiredChannelRepository(session)
