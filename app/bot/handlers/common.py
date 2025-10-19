@@ -466,10 +466,13 @@ def _order_display_status(order: Order) -> str:
     base = order.status.value.replace("_", " ").title()
     if order.status == OrderStatus.PAID:
         oxapay = _get_oxapay_payment(order)
-        fulfillment = oxapay.get("fulfillment") if isinstance(oxapay, dict) else {}
-        delivered_at = fulfillment.get("delivered_at") if isinstance(fulfillment, dict) else None
-        if delivered_at:
-            return "Delivered"
+        if isinstance(oxapay, dict):
+            notice = oxapay.get("delivery_notice")
+            if isinstance(notice, dict) and notice.get("sent_at"):
+                return "Delivered"
+            fulfillment = oxapay.get("fulfillment")
+            if isinstance(fulfillment, dict) and fulfillment.get("delivered_at"):
+                return "Fulfilled"
     return base
 
 

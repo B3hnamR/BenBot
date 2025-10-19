@@ -128,7 +128,10 @@ def _order_display_status(order: Order) -> str:
         extra = order.extra_attrs or {}
         meta = extra.get(OXAPAY_EXTRA_KEY)
         if isinstance(meta, dict):
+            notice = meta.get("delivery_notice")
+            if isinstance(notice, dict) and notice.get("sent_at"):
+                return "Delivered"
             fulfillment = meta.get("fulfillment")
             if isinstance(fulfillment, dict) and fulfillment.get("delivered_at"):
-                return "Delivered"
+                return "Fulfilled"
     return status

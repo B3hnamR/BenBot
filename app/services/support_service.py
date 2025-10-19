@@ -50,12 +50,16 @@ class SupportService:
             assigned_admin_id=assigned_admin_id,
             meta=meta,
         )
-        await self._tickets.add_message(
+        message = await self._tickets.add_message(
             ticket,
             role=SupportAuthorRole.USER,
             author_id=author_telegram_id,
             body=body,
         )
+        if "messages" not in ticket.__dict__ or ticket.messages is None:
+            ticket.messages = [message]
+        else:
+            ticket.messages.append(message)
         await self._tickets.set_status(ticket, SupportTicketStatus.AWAITING_ADMIN)
         return ticket
 
@@ -66,12 +70,16 @@ class SupportService:
         body: str,
         author_telegram_id: int | None,
     ) -> None:
-        await self._tickets.add_message(
+        message = await self._tickets.add_message(
             ticket,
             role=SupportAuthorRole.USER,
             author_id=author_telegram_id,
             body=body,
         )
+        if "messages" not in ticket.__dict__ or ticket.messages is None:
+            ticket.messages = [message]
+        else:
+            ticket.messages.append(message)
         await self._tickets.set_status(ticket, SupportTicketStatus.AWAITING_ADMIN)
 
     async def add_admin_message(
@@ -82,13 +90,17 @@ class SupportService:
         admin_telegram_id: int | None,
         payload: dict | None = None,
     ) -> None:
-        await self._tickets.add_message(
+        message = await self._tickets.add_message(
             ticket,
             role=SupportAuthorRole.ADMIN,
             author_id=admin_telegram_id,
             body=body,
             payload=payload,
         )
+        if "messages" not in ticket.__dict__ or ticket.messages is None:
+            ticket.messages = [message]
+        else:
+            ticket.messages.append(message)
         await self._tickets.set_status(ticket, SupportTicketStatus.AWAITING_USER)
 
     async def get_ticket_by_public_id(self, public_id: str) -> SupportTicket | None:
