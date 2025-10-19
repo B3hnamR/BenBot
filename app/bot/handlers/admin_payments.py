@@ -5,15 +5,18 @@ from datetime import datetime
 from decimal import Decimal
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards.admin import AdminMenuCallback
+from app.bot.handlers.admin import _format_admin_order_detail
+from app.bot.keyboards.admin import AdminMenuCallback, order_manage_keyboard
 from app.bot.keyboards.admin_payments import (
     AdminPaymentsCallback,
     payments_dashboard_keyboard,
     payments_orders_keyboard,
 )
+from app.bot.states.admin_payments import AdminPaymentsState
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories.order import OrderRepository
@@ -34,6 +37,17 @@ async def handle_admin_payments_menu(callback: CallbackQuery, session: AsyncSess
 @router.callback_query(F.data == AdminPaymentsCallback.REFRESH.value)
 async def handle_admin_payments_refresh(callback: CallbackQuery, session: AsyncSession) -> None:
     await _render_payments_dashboard(callback.message, session, notice="Dashboard refreshed.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminPaymentsCallback.SEARCH_ORDER.value)
+async def handle_admin_payments_search(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminPaymentsState.searching)
+    await state.update_data(
+        dashboard_chat_id=callback.message.chat.id,
+        dashboard_message_id=callback.message.message_id,
+    )
+    await callback.message.answer("Enter the order public ID. Send /cancel to abort.")
     await callback.answer()
 
 
@@ -123,6 +137,34 @@ async def handle_admin_payments_sync(callback: CallbackQuery, session: AsyncSess
 
     await _render_payments_dashboard(callback.message, session, notice=" ".join(notice_parts))
     await callback.answer("Sync finished.")
+
+
+@router.message(AdminPaymentsState.searching)
+async def handle_admin_payments_search_input(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Provide an order public ID or /cancel.")
+        return
+
+    if text.lower() in {"/cancel", "cancel"}:
+        await state.clear()
+        await message.answer("Order search cancelled.")
+        return
+
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(text)
+    if order is None:
+        await message.answer("Order not found. Try again or send /cancel to abort.")
+        return
+
+    await state.clear()
+    details = _format_admin_order_detail(order)
+    markup = order_manage_keyboard(order)
+    await message.answer(details, reply_markup=markup, disable_web_page_preview=True)
 
 
 async def _render_payments_dashboard(message, session: AsyncSession, *, notice: str | None = None) -> None:

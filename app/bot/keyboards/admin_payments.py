@@ -15,11 +15,13 @@ class AdminPaymentsCallback(StrEnum):
     VIEW_PENDING = "admin:pay:pending"
     VIEW_RECENT_PAID = "admin:pay:recent"
     SYNC_PENDING = "admin:pay:sync"
+    SEARCH_ORDER = "admin:pay:search"
 
 
 def payments_dashboard_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Refresh", callback_data=AdminPaymentsCallback.REFRESH.value)
+    builder.button(text="Search order", callback_data=AdminPaymentsCallback.SEARCH_ORDER.value)
     builder.button(text="Pending invoices", callback_data=AdminPaymentsCallback.VIEW_PENDING.value)
     builder.button(text="Recent paid orders", callback_data=AdminPaymentsCallback.VIEW_RECENT_PAID.value)
     builder.button(text="Sync pending now", callback_data=AdminPaymentsCallback.SYNC_PENDING.value)
