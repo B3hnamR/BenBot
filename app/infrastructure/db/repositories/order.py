@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.enums import OrderStatus
-from app.infrastructure.db.models import Order, OrderAnswer
+from app.infrastructure.db.models import Order, OrderAnswer, Product
 
 from .base import BaseRepository
 
@@ -124,7 +124,11 @@ class OrderRepository(BaseRepository):
     async def list_pending_crypto(self, limit: int = 10) -> list[Order]:
         result = await self.session.execute(
             select(Order)
-            .options(joinedload(Order.answers))
+            .options(
+                joinedload(Order.answers),
+                joinedload(Order.user),
+                joinedload(Order.product),
+            )
             .where(
                 Order.status == OrderStatus.AWAITING_PAYMENT,
                 Order.invoice_payload.isnot(None),
@@ -154,3 +158,72 @@ class OrderRepository(BaseRepository):
             .limit(limit)
         )
         return list(result.scalars().unique().all())
+
+    async def payment_status_summary(self) -> dict[OrderStatus, dict[str, dict[str, Decimal | int]]]:
+        result = await self.session.execute(
+            select(
+                Order.status,
+                Order.currency,
+                func.count(),
+                func.coalesce(func.sum(Order.total_amount), 0),
+            )
+            .group_by(Order.status, Order.currency)
+        )
+        summary: dict[OrderStatus, dict[str, dict[str, Decimal | int]]] = {}
+        for status, currency, count, total in result:
+            status_map = summary.setdefault(status, {})
+            status_map[currency] = {
+                "count": int(count),
+                "total": Decimal(total or 0),
+            }
+        return summary
+
+    async def list_recent_paid(self, limit: int = 5) -> list[Order]:
+        result = await self.session.execute(
+            select(Order)
+            .options(
+                joinedload(Order.user),
+                joinedload(Order.product),
+            )
+            .where(Order.status == OrderStatus.PAID)
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().unique().all())
+
+    async def list_pending_payments(self, limit: int = 10) -> list[Order]:
+        result = await self.session.execute(
+            select(Order)
+            .options(
+                joinedload(Order.user),
+                joinedload(Order.product),
+            )
+            .where(Order.status == OrderStatus.AWAITING_PAYMENT)
+            .order_by(Order.payment_expires_at.asc(), Order.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().unique().all())
+
+    async def top_paid_products(self, limit: int = 5) -> list[tuple[str, str, int, Decimal]]:
+        result = await self.session.execute(
+            select(
+                Product.name,
+                Order.currency,
+                func.count(),
+                func.coalesce(func.sum(Order.total_amount), 0),
+            )
+            .join(Product, Product.id == Order.product_id)
+            .where(Order.status == OrderStatus.PAID)
+            .group_by(Product.id, Product.name, Order.currency)
+            .order_by(func.coalesce(func.sum(Order.total_amount), 0).desc())
+            .limit(limit)
+        )
+        return [
+            (
+                name,
+                currency,
+                int(count),
+                Decimal(total or 0),
+            )
+            for name, currency, count, total in result.all()
+        ]
