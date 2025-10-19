@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -317,6 +317,14 @@ async def _render_orders_overview(
     )
     await _safe_edit_message(callback.message, summary, reply_markup=reply_markup)
 
+
+@router.message(Command("cancel"))
+async def handle_global_cancel(message: Message, state: FSMContext) -> None:
+    if await state.get_state() is None:
+        await message.answer("Nothing to cancel.")
+        return
+    await state.clear()
+    await message.answer("Operation cancelled.")
 
 
 def _format_orders_overview(
