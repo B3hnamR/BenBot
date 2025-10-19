@@ -4,11 +4,12 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
+from app.bot.keyboards.admin_support import ADMIN_SUPPORT_VIEW_PREFIX
 from app.bot.keyboards.support import (
     SUPPORT_BACK_MAIN,
     SUPPORT_CANCEL,
@@ -175,6 +176,8 @@ async def handle_support_message(
     ticket.user = profile
     if order_id and order is not None:
         ticket.order = order
+    await service.ensure_user_loaded(ticket)
+    await service.ensure_order_loaded(ticket)
 
     await state.set_state(SupportState.menu)
     await state.update_data(support_ticket_page=0)
@@ -269,7 +272,6 @@ async def handle_support_ticket_reply_message(
         body=text,
         author_telegram_id=message.from_user.id,
     )
-    await service.set_status(ticket, SupportTicketStatus.AWAITING_ADMIN)
     await service.ensure_user_loaded(ticket)
     await service.ensure_order_loaded(ticket)
     await _notify_admins_ticket_update(message.bot, ticket, text)
@@ -427,7 +429,7 @@ def _format_ticket_list(
     start_index = page * page_size
     for idx, ticket in enumerate(tickets, start=start_index + 1):
         status = ticket.status.value.replace("_", " ").title()
-        lines.append(f"{idx}. {status} • {ticket.subject}")
+        lines.append(f"{idx}. {status} - {ticket.subject}")
     lines.append("")
     lines.append("Select a ticket to view conversation or reply.")
     return "\n".join(lines)
@@ -448,7 +450,7 @@ def _format_ticket_detail(ticket: SupportTicket) -> str:
         lines.append(f"Category: {ticket.category}")
     if ticket.order is not None:
         product_name = getattr(ticket.order.product, "name", "-")
-        lines.append(f"Order: {ticket.order.public_id} • {product_name}")
+        lines.append(f"Order: {ticket.order.public_id} - {product_name}")
     if ticket.assigned_admin_id:
         lines.append(f"Assigned admin: {ticket.assigned_admin_id}")
     if ticket.meta:
@@ -465,7 +467,7 @@ def _format_ticket_detail(ticket: SupportTicket) -> str:
         for message in history:
             author = message.author_role.value.title()
             timestamp = message.created_at.strftime("%Y-%m-%d %H:%M UTC") if message.created_at else "-"
-            lines.append(f"{author} • {timestamp}")
+            lines.append(f"{author} - {timestamp}")
             lines.append(message.body)
             lines.append("")
     return "\n".join(lines).rstrip()

@@ -147,8 +147,11 @@ class SupportService:
         ticket.last_activity_at = datetime.now(tz=timezone.utc)
 
     async def ensure_order_loaded(self, ticket: SupportTicket) -> SupportTicket:
-        if ticket.order is None and ticket.order_id is not None:
-            ticket.order = await self._orders.get_by_id(ticket.order_id)  # type: ignore[attr-defined]
+        if ticket.order_id is not None:
+            if ticket.order is None:
+                ticket.order = await self._orders.get_by_id(ticket.order_id)  # type: ignore[attr-defined]
+            if ticket.order is not None and "product" not in ticket.order.__dict__:
+                await self._session.refresh(ticket.order, attribute_names=["product"])
         return ticket
 
     async def ensure_user_loaded(self, ticket: SupportTicket) -> SupportTicket:

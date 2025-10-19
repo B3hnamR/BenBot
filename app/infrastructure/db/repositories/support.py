@@ -7,7 +7,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import joinedload
 
 from app.core.enums import SupportAuthorRole, SupportTicketPriority, SupportTicketStatus
-from app.infrastructure.db.models import SupportMessage, SupportTicket
+from app.infrastructure.db.models import Order, SupportMessage, SupportTicket
 
 from .base import BaseRepository
 
@@ -62,7 +62,7 @@ class SupportRepository(BaseRepository):
             select(SupportTicket)
             .options(
                 joinedload(SupportTicket.user),
-                joinedload(SupportTicket.order),
+                joinedload(SupportTicket.order).joinedload(Order.product),
                 joinedload(SupportTicket.messages),
             )
             .where(SupportTicket.public_id == public_id)
@@ -105,7 +105,7 @@ class SupportRepository(BaseRepository):
             select(SupportTicket)
             .options(
                 joinedload(SupportTicket.user),
-                joinedload(SupportTicket.order),
+                joinedload(SupportTicket.order).joinedload(Order.product),
             )
             .order_by(SupportTicket.last_activity_at.desc())
         )
