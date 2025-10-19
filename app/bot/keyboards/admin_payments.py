@@ -33,8 +33,14 @@ def payments_orders_keyboard(orders: Sequence[Order], back_callback: AdminPaymen
     for order in orders:
         status = order.status.value.replace("_", " ").title()
         amount = f"{order.total_amount} {order.currency}"
+        product_name = getattr(order.product, "name", "-")
+        if order.user is not None:
+            user_display = order.user.display_name()
+        else:
+            user_display = f"id={order.user_id}"
+        text = f"{status} • {amount} • {product_name[:18]} • {user_display}"
         builder.button(
-            text=f"{status} • {amount}",
+            text=text,
             callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
         )
     builder.button(text="Back", callback_data=back_callback.value)
