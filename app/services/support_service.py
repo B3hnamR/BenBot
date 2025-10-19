@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.enums import SupportAuthorRole, SupportTicketPriority, SupportTicketStatus
 from app.infrastructure.db.models import SupportTicket
@@ -56,10 +57,7 @@ class SupportService:
             author_id=author_telegram_id,
             body=body,
         )
-        if "messages" not in ticket.__dict__ or ticket.messages is None:
-            ticket.messages = [message]
-        else:
-            ticket.messages.append(message)
+        _append_ticket_message(ticket, message)
         await self._tickets.set_status(ticket, SupportTicketStatus.AWAITING_ADMIN)
         return ticket
 
@@ -76,10 +74,7 @@ class SupportService:
             author_id=author_telegram_id,
             body=body,
         )
-        if "messages" not in ticket.__dict__ or ticket.messages is None:
-            ticket.messages = [message]
-        else:
-            ticket.messages.append(message)
+        _append_ticket_message(ticket, message)
         await self._tickets.set_status(ticket, SupportTicketStatus.AWAITING_ADMIN)
 
     async def add_admin_message(
@@ -97,10 +92,7 @@ class SupportService:
             body=body,
             payload=payload,
         )
-        if "messages" not in ticket.__dict__ or ticket.messages is None:
-            ticket.messages = [message]
-        else:
-            ticket.messages.append(message)
+        _append_ticket_message(ticket, message)
         await self._tickets.set_status(ticket, SupportTicketStatus.AWAITING_USER)
 
     async def get_ticket_by_public_id(self, public_id: str) -> SupportTicket | None:
@@ -163,3 +155,11 @@ class SupportService:
         if ticket.user is None:
             ticket.user = await self._users.get_by_id(ticket.user_id)  # type: ignore[attr-defined]
         return ticket
+
+
+def _append_ticket_message(ticket: SupportTicket, message) -> None:
+    current = ticket.__dict__.get("messages")
+    if current is None:
+        set_committed_value(ticket, "messages", [message])
+    else:
+        current.append(message)
