@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import TYPE_CHECKING, Sequence
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.enums import OrderStatus
@@ -56,6 +56,7 @@ ADMIN_ORDER_MARK_FULFILLED_PREFIX = "admin:orders:mark_fulfilled:"
 ADMIN_ORDER_MARK_PAID_PREFIX = "admin:orders:mark_paid:"
 ADMIN_ORDER_RECEIPT_PREFIX = "admin:orders:receipt:"
 ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:ord:delv:"
+ADMIN_RECENT_ORDERS_PAGE_PREFIX = "admin:orders:recent_page:"
 
 
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
@@ -170,7 +171,13 @@ def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyb
     return builder.as_markup()
 
 
-def recent_orders_keyboard(orders: Sequence["Order"]) -> InlineKeyboardMarkup:
+def recent_orders_keyboard(
+    orders: Sequence["Order"],
+    *,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for order in orders:
         status = order.status.value.replace("_", " ").title()
@@ -179,6 +186,28 @@ def recent_orders_keyboard(orders: Sequence["Order"]) -> InlineKeyboardMarkup:
             text=f"{status} • {amount}",
             callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
         )
+    nav_buttons: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="◀️ Prev",
+                callback_data=f"{ADMIN_RECENT_ORDERS_PAGE_PREFIX}{page - 1}",
+            )
+        )
+    nav_buttons.append(
+        InlineKeyboardButton(
+            text="Refresh",
+            callback_data=f"{ADMIN_RECENT_ORDERS_PAGE_PREFIX}{page}",
+        )
+    )
+    if has_next:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="▶️ Next",
+                callback_data=f"{ADMIN_RECENT_ORDERS_PAGE_PREFIX}{page + 1}",
+            )
+        )
+    builder.row(*nav_buttons)
     builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
     builder.adjust(1)
     return builder.as_markup()

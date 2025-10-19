@@ -45,6 +45,15 @@ class UserRepository(BaseRepository):
         return profile
 
     async def list_recent(self, limit: int = 20) -> list[UserProfile]:
+        users, _ = await self.paginate_recent(limit=limit, offset=0)
+        return users
+
+    async def paginate_recent(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[UserProfile], bool]:
         result = await self.session.execute(
             select(UserProfile)
             .order_by(
@@ -52,9 +61,12 @@ class UserRepository(BaseRepository):
                 UserProfile.last_seen_at.desc(),
                 UserProfile.created_at.desc(),
             )
-            .limit(limit)
+            .offset(offset)
+            .limit(limit + 1)
         )
-        return list(result.scalars().all())
+        users = list(result.scalars().all())
+        has_more = len(users) > limit
+        return users[:limit], has_more
 
     async def set_blocked(self, profile: UserProfile, blocked: bool) -> UserProfile:
         profile.is_blocked = blocked

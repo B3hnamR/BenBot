@@ -10,6 +10,7 @@ from app.bot.keyboards.admin_users import (
     ADMIN_USER_BACK,
     ADMIN_USER_EDIT_NOTES_PREFIX,
     ADMIN_USER_SEARCH,
+    ADMIN_USER_LIST_PAGE_PREFIX,
     ADMIN_USER_TOGGLE_BLOCK_PREFIX,
     ADMIN_USER_VIEW_ORDERS_PREFIX,
     ADMIN_USER_VIEW_PREFIX,
@@ -23,16 +24,29 @@ from app.infrastructure.db.repositories import OrderRepository, UserRepository
 
 router = Router(name="admin_users")
 
+USERS_PAGE_SIZE = 10
+
 
 @router.callback_query(F.data == AdminMenuCallback.MANAGE_USERS.value)
 async def handle_manage_users(callback: CallbackQuery, session: AsyncSession) -> None:
-    await _render_users_overview(callback.message, session)
+    await _render_users_overview(callback.message, session, page=0)
     await callback.answer()
 
 
 @router.callback_query(F.data == ADMIN_USER_BACK)
 async def handle_users_back(callback: CallbackQuery, session: AsyncSession) -> None:
-    await _render_users_overview(callback.message, session)
+    await _render_users_overview(callback.message, session, page=0)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_USER_LIST_PAGE_PREFIX))
+async def handle_users_page(callback: CallbackQuery, session: AsyncSession) -> None:
+    raw = callback.data.removeprefix(ADMIN_USER_LIST_PAGE_PREFIX)
+    try:
+        page = max(0, int(raw))
+    except ValueError:
+        page = 0
+    await _render_users_overview(callback.message, session, page=page)
     await callback.answer()
 
 
@@ -185,11 +199,36 @@ async def handle_user_view_orders(callback: CallbackQuery, session: AsyncSession
     await callback.answer()
 
 
-async def _render_users_overview(message: Message, session: AsyncSession) -> None:
+async def _render_users_overview(
+    message: Message,
+    session: AsyncSession,
+    *,
+    page: int = 0,
+) -> None:
     repo = UserRepository(session)
-    users = await repo.list_recent(limit=15)
-    text = _format_users_overview(users)
-    markup = users_overview_keyboard(users)
+    offset = max(page, 0) * USERS_PAGE_SIZE
+    users, has_more = await repo.paginate_recent(limit=USERS_PAGE_SIZE, offset=offset)
+    has_prev = page > 0 and offset > 0
+
+    if not users and page > 0:
+        page = max(page - 1, 0)
+        offset = page * USERS_PAGE_SIZE
+        users, has_more = await repo.paginate_recent(limit=USERS_PAGE_SIZE, offset=offset)
+        has_prev = page > 0 and offset > 0
+
+    text = _format_users_overview(
+        users,
+        page=page,
+        page_size=USERS_PAGE_SIZE,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
+    markup = users_overview_keyboard(
+        users,
+        page=page,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
     try:
         await message.edit_text(text, reply_markup=markup)
     except Exception:
@@ -226,15 +265,33 @@ async def _render_user_detail(
         await message.answer(text, reply_markup=markup)
 
 
-def _format_users_overview(users: list[UserProfile]) -> str:
-    if not users:
-        return "No users seen yet."
+def _format_users_overview(
+    users: list[UserProfile],
+    *,
+    page: int,
+    page_size: int,
+    has_prev: bool,
+    has_next: bool,
+) -> str:
     lines = ["<b>Recent users</b>"]
-    for user in users:
+    page_info = f"Page {page + 1}"
+    hints = []
+    if has_prev:
+        hints.append("Prev available")
+    if has_next:
+        hints.append("Next available")
+    if hints:
+        page_info += f" ({', '.join(hints)})"
+    lines.append(page_info)
+    if not users:
+        lines.append("No users seen yet.")
+        return "\n".join(lines)
+    start_index = page * page_size
+    for idx, user in enumerate(users, start=start_index + 1):
         name = user.display_name()
         last_seen = user.last_seen_at.strftime("%Y-%m-%d %H:%M") if user.last_seen_at else "-"
         status = "BLOCKED" if user.is_blocked else "ACTIVE"
-        lines.append(f"{name} - {status} - last seen {last_seen}")
+        lines.append(f"{idx}. {name} - {status} - last seen {last_seen}")
     lines.append("")
     lines.append("Select a user to view details.")
     return "\n".join(lines)

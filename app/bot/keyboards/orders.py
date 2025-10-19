@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.keyboards.main_menu import MainMenuCallback
@@ -15,6 +15,7 @@ ORDER_CONFIRM_CALLBACK = "order:confirm"
 ORDER_CANCEL_CALLBACK = "order:cancel"
 ORDER_VIEW_PREFIX = "order:view:"
 ORDER_LIST_BACK_CALLBACK = "order:list_back"
+ORDER_LIST_PAGE_PREFIX = "order:list_page:"
 ORDER_CANCEL_ORDER_PREFIX = "order:cancel_order:"
 ORDER_REISSUE_PREFIX = "order:reissue:"
 
@@ -27,20 +28,53 @@ def order_confirm_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def orders_list_keyboard(orders: Iterable[Order]) -> InlineKeyboardMarkup:
+def orders_list_keyboard(
+    orders: Iterable[Order],
+    *,
+    page: int,
+    page_size: int,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for order in orders:
         builder.button(
             text=_order_summary_line(order),
             callback_data=f"{ORDER_VIEW_PREFIX}{order.public_id}",
         )
-    builder.button(text="Refresh", callback_data=ORDER_LIST_BACK_CALLBACK)
+    nav_buttons: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="◀️ Prev",
+                callback_data=f"{ORDER_LIST_PAGE_PREFIX}{page - 1}",
+            )
+        )
+    nav_buttons.append(
+        InlineKeyboardButton(
+            text="Refresh",
+            callback_data=f"{ORDER_LIST_PAGE_PREFIX}{page}",
+        )
+    )
+    if has_next:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="▶️ Next",
+                callback_data=f"{ORDER_LIST_PAGE_PREFIX}{page + 1}",
+            )
+        )
+    builder.row(*nav_buttons)
     builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
     builder.adjust(1)
     return builder.as_markup()
 
 
-def order_details_keyboard(order: Order, pay_link: str | None = None) -> InlineKeyboardMarkup:
+def order_details_keyboard(
+    order: Order,
+    pay_link: str | None = None,
+    *,
+    page: int | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if pay_link and order.status == OrderStatus.AWAITING_PAYMENT:
         builder.button(text="Open crypto checkout", url=pay_link)
@@ -58,7 +92,12 @@ def order_details_keyboard(order: Order, pay_link: str | None = None) -> InlineK
             text="Create new invoice",
             callback_data=f"{ORDER_REISSUE_PREFIX}{order.public_id}",
         )
-    builder.button(text="Back to orders", callback_data=ORDER_LIST_BACK_CALLBACK)
+    back_callback = (
+        f"{ORDER_LIST_PAGE_PREFIX}{max(page or 0, 0)}"
+        if page is not None
+        else ORDER_LIST_BACK_CALLBACK
+    )
+    builder.button(text="Back to orders", callback_data=back_callback)
     builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
     builder.adjust(1)
     return builder.as_markup()

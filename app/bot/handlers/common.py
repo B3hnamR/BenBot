@@ -6,6 +6,7 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,7 @@ from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.keyboards.orders import (
     ORDER_CANCEL_ORDER_PREFIX,
     ORDER_LIST_BACK_CALLBACK,
+    ORDER_LIST_PAGE_PREFIX,
     ORDER_REISSUE_PREFIX,
     ORDER_VIEW_PREFIX,
     order_details_keyboard,
@@ -49,19 +51,32 @@ async def handle_start(message: Message) -> None:
 
 
 @router.callback_query(F.data == MainMenuCallback.ACCOUNT.value)
-async def handle_account(callback: CallbackQuery, session: AsyncSession) -> None:
-    await _render_orders_overview(callback, session)
+async def handle_account(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    await _render_orders_overview(callback, session, state=state)
     await callback.answer()
 
 
 @router.callback_query(F.data == ORDER_LIST_BACK_CALLBACK)
-async def handle_orders_back(callback: CallbackQuery, session: AsyncSession) -> None:
-    await _render_orders_overview(callback, session)
+async def handle_orders_back(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    data = await state.get_data()
+    page = int(data.get("user_orders_page", 0))
+    await _render_orders_overview(callback, session, page=page, state=state)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ORDER_LIST_PAGE_PREFIX))
+async def handle_orders_paginate(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    raw = callback.data.removeprefix(ORDER_LIST_PAGE_PREFIX)
+    try:
+        page = max(0, int(raw))
+    except ValueError:
+        page = 0
+    await _render_orders_overview(callback, session, page=page, state=state)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith(ORDER_VIEW_PREFIX))
-async def handle_order_view(callback: CallbackQuery, session: AsyncSession) -> None:
+async def handle_order_view(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     public_id = callback.data.removeprefix(ORDER_VIEW_PREFIX)
     user_repo = UserRepository(session)
     profile = await user_repo.get_by_telegram_id(callback.from_user.id)
@@ -90,10 +105,16 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession) -> N
     if order.status == OrderStatus.EXPIRED and previous_status != OrderStatus.EXPIRED:
         await notifications.notify_expired(callback.bot, order, reason="timeout_check")
 
+    state_data = await state.get_data()
+    current_page = int(state_data.get("user_orders_page", 0))
     await _safe_edit_message(
         callback.message,
         _format_order_details(order, crypto_status),
-        reply_markup=order_details_keyboard(order, pay_link=crypto_status.pay_link),
+        reply_markup=order_details_keyboard(
+            order,
+            pay_link=crypto_status.pay_link,
+            page=current_page,
+        ),
     )
 
     if order.status == OrderStatus.PAID:
@@ -103,7 +124,7 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession) -> N
 
 
 @router.callback_query(F.data.startswith(ORDER_CANCEL_ORDER_PREFIX))
-async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession) -> None:
+async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     public_id = callback.data.removeprefix(ORDER_CANCEL_ORDER_PREFIX)
     user_repo = UserRepository(session)
     profile = await user_repo.get_by_telegram_id(callback.from_user.id)
@@ -127,12 +148,14 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession) ->
 
     await order_service.mark_cancelled(order)
     await OrderNotificationService(session).notify_cancelled(callback.bot, order, reason="user_cancelled")
-    await _render_orders_overview(callback, session)
+    state_data = await state.get_data()
+    page = int(state_data.get("user_orders_page", 0))
+    await _render_orders_overview(callback, session, page=page, state=state)
     await callback.answer("Order cancelled")
 
 
 @router.callback_query(F.data.startswith(ORDER_REISSUE_PREFIX))
-async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession) -> None:
+async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     public_id = callback.data.removeprefix(ORDER_REISSUE_PREFIX)
     user_repo = UserRepository(session)
     profile = await user_repo.get_by_telegram_id(callback.from_user.id)
@@ -173,10 +196,17 @@ async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession) -
         await callback.answer(result.error, show_alert=True)
         return
 
+    state_data = await state.get_data()
+    current_page = int(state_data.get("user_orders_page", 0))
+
     await _safe_edit_message(
         callback.message,
         _format_order_details(order, None),
-        reply_markup=order_details_keyboard(order, pay_link=result.pay_link),
+        reply_markup=order_details_keyboard(
+            order,
+            pay_link=result.pay_link,
+            page=current_page,
+        ),
     )
     await callback.answer("New invoice created.")
 
@@ -230,7 +260,16 @@ async def handle_subscription_no_link(callback: CallbackQuery) -> None:
     )
 
 
-async def _render_orders_overview(callback: CallbackQuery, session: AsyncSession) -> None:
+ORDERS_PAGE_SIZE = 5
+
+
+async def _render_orders_overview(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    *,
+    page: int = 0,
+    state: FSMContext | None = None,
+) -> None:
     user_repo = UserRepository(session)
     profile = await user_repo.get_by_telegram_id(callback.from_user.id)
     if profile is None:
@@ -242,7 +281,24 @@ async def _render_orders_overview(callback: CallbackQuery, session: AsyncSession
         return
 
     order_service = OrderService(session)
-    orders = await order_service.list_user_orders(profile.id)
+    offset = max(page, 0) * ORDERS_PAGE_SIZE
+    orders, has_more = await order_service.paginate_user_orders(
+        profile.id,
+        limit=ORDERS_PAGE_SIZE,
+        offset=offset,
+    )
+    has_prev = page > 0 and offset > 0
+
+    if not orders and page > 0:
+        # fallback to previous page if current page is empty
+        page = max(page - 1, 0)
+        offset = page * ORDERS_PAGE_SIZE
+        orders, has_more = await order_service.paginate_user_orders(
+            profile.id,
+            limit=ORDERS_PAGE_SIZE,
+            offset=offset,
+        )
+        has_prev = page > 0 and offset > 0
 
     if not orders:
         await _safe_edit_message(
@@ -252,20 +308,51 @@ async def _render_orders_overview(callback: CallbackQuery, session: AsyncSession
         )
         return
 
-    summary = _format_orders_overview(orders)
-    reply_markup = orders_list_keyboard(orders[:10])
+    if state is not None:
+        await state.update_data(user_orders_page=page)
+
+    summary = _format_orders_overview(
+        orders,
+        page=page,
+        page_size=ORDERS_PAGE_SIZE,
+        has_prev=has_prev,
+        has_more=has_more,
+    )
+    reply_markup = orders_list_keyboard(
+        orders,
+        page=page,
+        page_size=ORDERS_PAGE_SIZE,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
     await _safe_edit_message(callback.message, summary, reply_markup=reply_markup)
 
 
 
-def _format_orders_overview(orders: list[Order]) -> str:
+def _format_orders_overview(
+    orders: list[Order],
+    *,
+    page: int,
+    page_size: int,
+    has_prev: bool,
+    has_more: bool,
+) -> str:
     lines = ["<b>Your orders</b>"]
-    for order in orders[:10]:
+    page_info = f"Page {page + 1}"
+    if has_prev or has_more:
+        hints = []
+        if has_prev:
+            hints.append("Prev available")
+        if has_more:
+            hints.append("Next available")
+        if hints:
+            page_info += f" ({', '.join(hints)})"
+    lines.append(page_info)
+    start_index = page * page_size
+    for idx, order in enumerate(orders, start=start_index + 1):
         status = _order_display_status(order)
         created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
-        lines.append(f"{status} - {order.total_amount} {order.currency} - created {created}")
-    if len(orders) > 10:
-        lines.append("Showing the latest 10 orders.")
+        lines.append(f"{idx}. {status} - {order.total_amount} {order.currency} - created {created}")
     lines.append("")
     lines.append("Select an order to view details.")
     return "\n".join(lines)

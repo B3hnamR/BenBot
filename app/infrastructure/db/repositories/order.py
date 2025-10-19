@@ -64,6 +64,28 @@ class OrderRepository(BaseRepository):
         )
         return list(result.scalars().unique().all())
 
+    async def paginate_user_orders(
+        self,
+        user_id: int,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Order], bool]:
+        result = await self.session.execute(
+            select(Order)
+            .options(
+                joinedload(Order.answers),
+                selectinload(Order.product),
+            )
+            .where(Order.user_id == user_id)
+            .order_by(Order.created_at.desc())
+            .offset(offset)
+            .limit(limit + 1)
+        )
+        orders = list(result.scalars().unique().all())
+        has_more = len(orders) > limit
+        return orders[:limit], has_more
+
     async def get_by_public_id(self, public_id: str) -> Order | None:
         result = await self.session.execute(
             select(Order)
@@ -147,6 +169,15 @@ class OrderRepository(BaseRepository):
         return {status: count for status, count in result.all()}
 
     async def list_recent(self, limit: int = 10) -> list[Order]:
+        orders, _ = await self.paginate_recent(limit=limit, offset=0)
+        return orders
+
+    async def paginate_recent(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Order], bool]:
         result = await self.session.execute(
             select(Order)
             .options(
@@ -155,9 +186,12 @@ class OrderRepository(BaseRepository):
                 joinedload(Order.product),
             )
             .order_by(Order.created_at.desc())
-            .limit(limit)
+            .offset(offset)
+            .limit(limit + 1)
         )
-        return list(result.scalars().unique().all())
+        orders = list(result.scalars().unique().all())
+        has_more = len(orders) > limit
+        return orders[:limit], has_more
 
     async def payment_status_summary(self) -> dict[OrderStatus, dict[str, dict[str, Decimal | int]]]:
         result = await self.session.execute(
@@ -178,7 +212,12 @@ class OrderRepository(BaseRepository):
             }
         return summary
 
-    async def list_recent_paid(self, limit: int = 5) -> list[Order]:
+    async def paginate_recent_paid(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Order], bool]:
         result = await self.session.execute(
             select(Order)
             .options(
@@ -187,11 +226,23 @@ class OrderRepository(BaseRepository):
             )
             .where(Order.status == OrderStatus.PAID)
             .order_by(Order.created_at.desc())
-            .limit(limit)
+            .offset(offset)
+            .limit(limit + 1)
         )
-        return list(result.scalars().unique().all())
+        orders = list(result.scalars().unique().all())
+        has_more = len(orders) > limit
+        return orders[:limit], has_more
 
-    async def list_pending_payments(self, limit: int = 10) -> list[Order]:
+    async def list_recent_paid(self, limit: int = 5) -> list[Order]:
+        orders, _ = await self.paginate_recent_paid(limit=limit, offset=0)
+        return orders
+
+    async def paginate_pending_payments(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Order], bool]:
         result = await self.session.execute(
             select(Order)
             .options(
@@ -200,9 +251,16 @@ class OrderRepository(BaseRepository):
             )
             .where(Order.status == OrderStatus.AWAITING_PAYMENT)
             .order_by(Order.payment_expires_at.asc(), Order.created_at.desc())
-            .limit(limit)
+            .offset(offset)
+            .limit(limit + 1)
         )
-        return list(result.scalars().unique().all())
+        orders = list(result.scalars().unique().all())
+        has_more = len(orders) > limit
+        return orders[:limit], has_more
+
+    async def list_pending_payments(self, limit: int = 10) -> list[Order]:
+        orders, _ = await self.paginate_pending_payments(limit=limit, offset=0)
+        return orders
 
     async def top_paid_products(self, limit: int = 5) -> list[tuple[str, str, int, Decimal]]:
         result = await self.session.execute(

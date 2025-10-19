@@ -13,6 +13,8 @@ from app.bot.handlers.admin import _format_admin_order_detail
 from app.bot.keyboards.admin import AdminMenuCallback, order_manage_keyboard
 from app.bot.keyboards.admin_payments import (
     AdminPaymentsCallback,
+    ADMIN_PAYMENTS_PENDING_PAGE_PREFIX,
+    ADMIN_PAYMENTS_RECENT_PAGE_PREFIX,
     payments_dashboard_keyboard,
     payments_orders_keyboard,
 )
@@ -26,6 +28,9 @@ from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
 
 router = Router(name="admin_payments")
+
+PENDING_PAGE_SIZE = 5
+RECENT_PAGE_SIZE = 5
 
 
 @router.callback_query(F.data == AdminMenuCallback.MANAGE_PAYMENTS.value)
@@ -53,37 +58,51 @@ async def handle_admin_payments_search(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == AdminPaymentsCallback.VIEW_PENDING.value)
 async def handle_admin_payments_pending(callback: CallbackQuery, session: AsyncSession) -> None:
-    repo = OrderRepository(session)
-    orders = await repo.list_pending_payments(limit=10)
-    if not orders:
+    rendered = await _render_pending_orders_list(callback.message, session, page=0)
+    if not rendered:
         await callback.answer("No pending invoices.", show_alert=True)
         await _render_payments_dashboard(callback.message, session, notice="No pending invoices to display.")
         return
+    await callback.answer()
 
-    text = _format_pending_orders(orders)
-    markup = payments_orders_keyboard(orders, AdminPaymentsCallback.REFRESH)
+
+@router.callback_query(F.data.startswith(ADMIN_PAYMENTS_PENDING_PAGE_PREFIX))
+async def handle_admin_payments_pending_page(callback: CallbackQuery, session: AsyncSession) -> None:
+    raw = callback.data.removeprefix(ADMIN_PAYMENTS_PENDING_PAGE_PREFIX)
     try:
-        await callback.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except Exception:
-        await callback.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+        page = max(0, int(raw))
+    except ValueError:
+        page = 0
+    rendered = await _render_pending_orders_list(callback.message, session, page=page)
+    if not rendered:
+        await callback.answer("No pending invoices.", show_alert=True)
+        await _render_payments_dashboard(callback.message, session, notice="No pending invoices to display.")
+        return
     await callback.answer()
 
 
 @router.callback_query(F.data == AdminPaymentsCallback.VIEW_RECENT_PAID.value)
 async def handle_admin_payments_recent(callback: CallbackQuery, session: AsyncSession) -> None:
-    repo = OrderRepository(session)
-    orders = await repo.list_recent_paid(limit=10)
-    if not orders:
+    rendered = await _render_recent_paid_list(callback.message, session, page=0)
+    if not rendered:
         await callback.answer("No paid orders yet.", show_alert=True)
         await _render_payments_dashboard(callback.message, session, notice="No paid orders recorded yet.")
         return
+    await callback.answer()
 
-    text = _format_recent_paid_orders(orders)
-    markup = payments_orders_keyboard(orders, AdminPaymentsCallback.REFRESH)
+
+@router.callback_query(F.data.startswith(ADMIN_PAYMENTS_RECENT_PAGE_PREFIX))
+async def handle_admin_payments_recent_page(callback: CallbackQuery, session: AsyncSession) -> None:
+    raw = callback.data.removeprefix(ADMIN_PAYMENTS_RECENT_PAGE_PREFIX)
     try:
-        await callback.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except Exception:
-        await callback.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+        page = max(0, int(raw))
+    except ValueError:
+        page = 0
+    rendered = await _render_recent_paid_list(callback.message, session, page=page)
+    if not rendered:
+        await callback.answer("No paid orders yet.", show_alert=True)
+        await _render_payments_dashboard(callback.message, session, notice="No paid orders recorded yet.")
+        return
     await callback.answer()
 
 
@@ -183,6 +202,90 @@ async def _render_payments_dashboard(message, session: AsyncSession, *, notice: 
         await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
+async def _render_pending_orders_list(
+    message,
+    session: AsyncSession,
+    *,
+    page: int,
+) -> bool:
+    repo = OrderRepository(session)
+    offset = max(page, 0) * PENDING_PAGE_SIZE
+    orders, has_more = await repo.paginate_pending_payments(limit=PENDING_PAGE_SIZE, offset=offset)
+    has_prev = page > 0 and offset > 0
+
+    if not orders and page > 0:
+        page = max(page - 1, 0)
+        offset = page * PENDING_PAGE_SIZE
+        orders, has_more = await repo.paginate_pending_payments(limit=PENDING_PAGE_SIZE, offset=offset)
+        has_prev = page > 0 and offset > 0
+
+    if not orders:
+        return False
+
+    text = _format_pending_orders(
+        orders,
+        page=page,
+        page_size=PENDING_PAGE_SIZE,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
+    markup = payments_orders_keyboard(
+        orders,
+        page=page,
+        has_prev=has_prev,
+        has_next=has_more,
+        source_prefix=ADMIN_PAYMENTS_PENDING_PAGE_PREFIX,
+        back_callback=AdminPaymentsCallback.REFRESH.value,
+    )
+    try:
+        await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+    return True
+
+
+async def _render_recent_paid_list(
+    message,
+    session: AsyncSession,
+    *,
+    page: int,
+) -> bool:
+    repo = OrderRepository(session)
+    offset = max(page, 0) * RECENT_PAGE_SIZE
+    orders, has_more = await repo.paginate_recent_paid(limit=RECENT_PAGE_SIZE, offset=offset)
+    has_prev = page > 0 and offset > 0
+
+    if not orders and page > 0:
+        page = max(page - 1, 0)
+        offset = page * RECENT_PAGE_SIZE
+        orders, has_more = await repo.paginate_recent_paid(limit=RECENT_PAGE_SIZE, offset=offset)
+        has_prev = page > 0 and offset > 0
+
+    if not orders:
+        return False
+
+    text = _format_recent_paid_orders(
+        orders,
+        page=page,
+        page_size=RECENT_PAGE_SIZE,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
+    markup = payments_orders_keyboard(
+        orders,
+        page=page,
+        has_prev=has_prev,
+        has_next=has_more,
+        source_prefix=ADMIN_PAYMENTS_RECENT_PAGE_PREFIX,
+        back_callback=AdminPaymentsCallback.REFRESH.value,
+    )
+    try:
+        await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+    return True
+
+
 def _format_payments_summary(
     summary: dict[OrderStatus, dict[str, dict[str, Decimal | int]]],
     top_products: list[tuple[str, str, int, Decimal]],
@@ -240,14 +343,31 @@ def _format_payments_summary(
     return "\n".join(lines)
 
 
-def _format_pending_orders(orders: list[Order]) -> str:
+def _format_pending_orders(
+    orders: list[Order],
+    *,
+    page: int,
+    page_size: int,
+    has_prev: bool,
+    has_next: bool,
+) -> str:
     lines = ["<b>Pending invoices</b>"]
-    for order in orders:
+    page_info = f"Page {page + 1}"
+    hints = []
+    if has_prev:
+        hints.append("Prev available")
+    if has_next:
+        hints.append("Next available")
+    if hints:
+        page_info += f" ({', '.join(hints)})"
+    lines.append(page_info)
+    start_index = page * page_size
+    for idx, order in enumerate(orders, start=start_index + 1):
         product_name = getattr(order.product, "name", "-")
         amount = f"{_format_amount(order.total_amount)} {order.currency}"
         expires = _format_datetime(order.payment_expires_at)
         pay_link = _extract_pay_link(order)
-        lines.append(f"{product_name} • {amount}")
+        lines.append(f"{idx}. {product_name} • {amount}")
         lines.append(f"Order: <code>{order.public_id}</code> • User: {order.user_id}")
         if order.invoice_payload:
             lines.append(f"Track ID: {order.invoice_payload}")
@@ -260,9 +380,26 @@ def _format_pending_orders(orders: list[Order]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _format_recent_paid_orders(orders: list[Order]) -> str:
+def _format_recent_paid_orders(
+    orders: list[Order],
+    *,
+    page: int,
+    page_size: int,
+    has_prev: bool,
+    has_next: bool,
+) -> str:
     lines = ["<b>Recently paid orders</b>"]
-    for order in orders:
+    page_info = f"Page {page + 1}"
+    hints = []
+    if has_prev:
+        hints.append("Prev available")
+    if has_next:
+        hints.append("Next available")
+    if hints:
+        page_info += f" ({', '.join(hints)})"
+    lines.append(page_info)
+    start_index = page * page_size
+    for idx, order in enumerate(orders, start=start_index + 1):
         product_name = getattr(order.product, "name", "-")
         amount = f"{_format_amount(order.total_amount)} {order.currency}"
         paid_at = _format_datetime(order.updated_at or order.created_at)
@@ -270,7 +407,7 @@ def _format_recent_paid_orders(orders: list[Order]) -> str:
             user_display = f"{order.user.display_name()} (id={order.user_id})"
         else:
             user_display = f"user_id={order.user_id}"
-        lines.append(f"{product_name} • {amount}")
+        lines.append(f"{idx}. {product_name} • {amount}")
         lines.append(f"{paid_at} • {user_display}")
         lines.append(f"Order: <code>{order.public_id}</code>")
         lines.append("")

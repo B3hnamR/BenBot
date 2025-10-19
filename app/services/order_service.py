@@ -27,6 +27,15 @@ class OrderService:
     async def list_user_orders(self, user_id: int) -> list[Order]:
         return await self._orders.list_for_user(user_id)
 
+    async def paginate_user_orders(
+        self,
+        user_id: int,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Order], bool]:
+        return await self._orders.paginate_user_orders(user_id, limit=limit, offset=offset)
+
     async def get_order_by_public_id(self, public_id: str) -> Order | None:
         return await self._orders.get_by_public_id(public_id)
 

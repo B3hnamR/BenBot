@@ -16,6 +16,7 @@ from app.bot.keyboards.admin import (
     ADMIN_ORDER_MARK_FULFILLED_PREFIX,
     ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX,
     ADMIN_ORDER_MARK_PAID_PREFIX,
+    ADMIN_RECENT_ORDERS_PAGE_PREFIX,
     ADMIN_ORDER_RECEIPT_PREFIX,
     ADMIN_ORDER_VIEW_PREFIX,
     admin_menu_keyboard,
@@ -37,6 +38,8 @@ from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
 
 router = Router(name="admin")
+
+RECENT_ORDERS_PAGE_SIZE = 10
 
 
 @router.callback_query(F.data == MainMenuCallback.ADMIN.value)
@@ -97,7 +100,21 @@ async def handle_toggle_expire_alert(callback: CallbackQuery, session: AsyncSess
 
 @router.callback_query(F.data == AdminOrderCallback.VIEW_RECENT.value)
 async def handle_orders_view_recent(callback: CallbackQuery, session: AsyncSession) -> None:
-    rendered = await _render_recent_orders_message(callback.message, session)
+    rendered = await _render_recent_orders_message(callback.message, session, page=0)
+    if not rendered:
+        await callback.answer("No recent orders found.", show_alert=True)
+    else:
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_RECENT_ORDERS_PAGE_PREFIX))
+async def handle_orders_view_recent_page(callback: CallbackQuery, session: AsyncSession) -> None:
+    raw = callback.data.removeprefix(ADMIN_RECENT_ORDERS_PAGE_PREFIX)
+    try:
+        page = max(0, int(raw))
+    except ValueError:
+        page = 0
+    rendered = await _render_recent_orders_message(callback.message, session, page=page)
     if not rendered:
         await callback.answer("No recent orders found.", show_alert=True)
     else:
@@ -690,9 +707,19 @@ async def _render_recent_orders_message(
     session: AsyncSession,
     *,
     notice: str | None = None,
+    page: int = 0,
 ) -> bool:
     repo = OrderRepository(session)
-    orders = await repo.list_recent(limit=10)
+    offset = max(page, 0) * RECENT_ORDERS_PAGE_SIZE
+    orders, has_more = await repo.paginate_recent(limit=RECENT_ORDERS_PAGE_SIZE, offset=offset)
+    has_prev = page > 0 and offset > 0
+
+    if not orders and page > 0:
+        page = max(page - 1, 0)
+        offset = page * RECENT_ORDERS_PAGE_SIZE
+        orders, has_more = await repo.paginate_recent(limit=RECENT_ORDERS_PAGE_SIZE, offset=offset)
+        has_prev = page > 0 and offset > 0
+
     if not orders:
         await _render_order_settings_message(
             message,
@@ -701,10 +728,21 @@ async def _render_recent_orders_message(
         )
         return False
 
-    text = _format_recent_orders_text(orders)
+    text = _format_recent_orders_text(
+        orders,
+        page=page,
+        page_size=RECENT_ORDERS_PAGE_SIZE,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
     if notice:
         text = f"{notice}\n\n{text}"
-    markup = recent_orders_keyboard(orders)
+    markup = recent_orders_keyboard(
+        orders,
+        page=page,
+        has_prev=has_prev,
+        has_next=has_more,
+    )
     try:
         await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
@@ -886,14 +924,31 @@ def _format_order_alerts_text(alerts: ConfigService.AlertSettings) -> str:
     return "\n".join(lines)
 
 
-def _format_recent_orders_text(orders: list[Order]) -> str:
+def _format_recent_orders_text(
+    orders: list[Order],
+    *,
+    page: int,
+    page_size: int,
+    has_prev: bool,
+    has_next: bool,
+) -> str:
     lines = ["<b>Recent orders</b>"]
-    for order in orders:
+    page_info = f"Page {page + 1}"
+    hints = []
+    if has_prev:
+        hints.append("Prev available")
+    if has_next:
+        hints.append("Next available")
+    if hints:
+        page_info += f" ({', '.join(hints)})"
+    lines.append(page_info)
+    start_index = page * page_size
+    for idx, order in enumerate(orders, start=start_index + 1):
         status = order.status.value.replace("_", " ").title()
         created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
         product_name = getattr(order.product, "name", "-")
         amount = f"{order.total_amount} {order.currency}"
-        lines.append(f"{status} - {amount} - {product_name}")
+        lines.append(f"{idx}. {status} - {amount} - {product_name}")
         lines.append(f"User: {order.user_id} - Public ID: <code>{order.public_id}</code> - Created: {created}")
     lines.append("")
     lines.append("Select an order below to view details.")

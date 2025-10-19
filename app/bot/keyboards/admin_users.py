@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.keyboards.admin import AdminMenuCallback, ADMIN_ORDER_VIEW_PREFIX
@@ -14,9 +14,16 @@ ADMIN_USER_EDIT_NOTES_PREFIX = "admin:user:notes:"
 ADMIN_USER_VIEW_ORDERS_PREFIX = "admin:user:orders:"
 ADMIN_USER_BACK = "admin:user:back"
 ADMIN_USER_SEARCH = "admin:user:search"
+ADMIN_USER_LIST_PAGE_PREFIX = "admin:user:list:"
 
 
-def users_overview_keyboard(users: Sequence[UserProfile]) -> InlineKeyboardMarkup:
+def users_overview_keyboard(
+    users: Sequence[UserProfile],
+    *,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for user in users:
         label = user.display_name()
@@ -24,6 +31,28 @@ def users_overview_keyboard(users: Sequence[UserProfile]) -> InlineKeyboardMarku
             text=label,
             callback_data=f"{ADMIN_USER_VIEW_PREFIX}{user.id}",
         )
+    nav_buttons: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="◀️ Prev",
+                callback_data=f"{ADMIN_USER_LIST_PAGE_PREFIX}{page - 1}",
+            )
+        )
+    nav_buttons.append(
+        InlineKeyboardButton(
+            text="Refresh",
+            callback_data=f"{ADMIN_USER_LIST_PAGE_PREFIX}{page}",
+        )
+    )
+    if has_next:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="▶️ Next",
+                callback_data=f"{ADMIN_USER_LIST_PAGE_PREFIX}{page + 1}",
+            )
+        )
+    builder.row(*nav_buttons)
     builder.button(text="Search user", callback_data=ADMIN_USER_SEARCH)
     builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
     builder.adjust(1)

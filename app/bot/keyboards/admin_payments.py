@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Sequence
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.keyboards.admin import AdminMenuCallback, ADMIN_ORDER_VIEW_PREFIX
@@ -18,6 +18,10 @@ class AdminPaymentsCallback(StrEnum):
     SEARCH_ORDER = "admin:pay:search"
 
 
+ADMIN_PAYMENTS_PENDING_PAGE_PREFIX = "admin:pay:pend:"
+ADMIN_PAYMENTS_RECENT_PAGE_PREFIX = "admin:pay:rec:"
+
+
 def payments_dashboard_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Refresh", callback_data=AdminPaymentsCallback.REFRESH.value)
@@ -30,7 +34,15 @@ def payments_dashboard_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def payments_orders_keyboard(orders: Sequence[Order], back_callback: AdminPaymentsCallback) -> InlineKeyboardMarkup:
+def payments_orders_keyboard(
+    orders: Sequence[Order],
+    *,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+    source_prefix: str,
+    back_callback: str,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for order in orders:
         status = order.status.value.replace("_", " ").title()
@@ -45,6 +57,28 @@ def payments_orders_keyboard(orders: Sequence[Order], back_callback: AdminPaymen
             text=text,
             callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
         )
-    builder.button(text="Back", callback_data=back_callback.value)
+    nav_buttons: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="◀️ Prev",
+                callback_data=f"{source_prefix}{page - 1}",
+            )
+        )
+    nav_buttons.append(
+        InlineKeyboardButton(
+            text="Refresh",
+            callback_data=f"{source_prefix}{page}",
+        )
+    )
+    if has_next:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="▶️ Next",
+                callback_data=f"{source_prefix}{page + 1}",
+            )
+        )
+    builder.row(*nav_buttons)
+    builder.button(text="Back", callback_data=back_callback)
     builder.adjust(1)
     return builder.as_markup()
