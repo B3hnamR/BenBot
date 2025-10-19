@@ -261,7 +261,7 @@ async def _render_orders_overview(callback: CallbackQuery, session: AsyncSession
 def _format_orders_overview(orders: list[Order]) -> str:
     lines = ["<b>Your orders</b>"]
     for order in orders[:10]:
-        status = order.status.value.replace("_", " ").title()
+        status = _order_display_status(order)
         created = order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else "-"
         lines.append(f"{status} - {order.total_amount} {order.currency} - created {created}")
     if len(orders) > 10:
@@ -274,7 +274,7 @@ def _format_orders_overview(orders: list[Order]) -> str:
 def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None = None) -> str:
     lines = [
         f"<b>Order {order.public_id}</b>",
-        f"Status: {order.status.value.replace('_', ' ').title()}",
+        f"Status: {_order_display_status(order)}",
         f"Total: {order.total_amount} {order.currency}",
     ]
     if order.invoice_payload:
@@ -375,5 +375,16 @@ def _get_oxapay_payment(order: Order) -> dict[str, Any]:
     if isinstance(data, dict):
         return data
     return {}
+
+
+def _order_display_status(order: Order) -> str:
+    base = order.status.value.replace("_", " ").title()
+    if order.status == OrderStatus.PAID:
+        oxapay = _get_oxapay_payment(order)
+        fulfillment = oxapay.get("fulfillment") if isinstance(oxapay, dict) else {}
+        delivered_at = fulfillment.get("delivered_at") if isinstance(fulfillment, dict) else None
+        if delivered_at:
+            return "Delivered"
+    return base
 
 

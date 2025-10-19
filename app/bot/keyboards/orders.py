@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.bot.keyboards.main_menu import MainMenuCallback
 from app.infrastructure.db.models import Order
 from app.core.enums import OrderStatus
+from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 
 
 ORDER_CONFIRM_CALLBACK = "order:confirm"
@@ -71,5 +72,17 @@ def order_cancel_keyboard(callback_data: str) -> InlineKeyboardMarkup:
 
 
 def _order_summary_line(order: Order) -> str:
-    status = order.status.value.replace("_", " ").title()
+    status = _order_display_status(order)
     return f"{status} - {order.total_amount} {order.currency}" if order.total_amount is not None else status
+
+
+def _order_display_status(order: Order) -> str:
+    status = order.status.value.replace("_", " ").title()
+    if order.status == OrderStatus.PAID:
+        extra = order.extra_attrs or {}
+        meta = extra.get(OXAPAY_EXTRA_KEY)
+        if isinstance(meta, dict):
+            fulfillment = meta.get("fulfillment")
+            if isinstance(fulfillment, dict) and fulfillment.get("delivered_at"):
+                return "Delivered"
+    return status
