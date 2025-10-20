@@ -219,7 +219,7 @@ class SupportService:
         timestamps = [ts for ts in (last_global, last_ticket) if ts is not None]
         if not timestamps:
             return None
-        latest = max(timestamps)
+        latest = max(_ensure_aware(ts) for ts in timestamps)
         elapsed = (datetime.now(tz=timezone.utc) - latest).total_seconds()
         if elapsed < settings.min_reply_interval_seconds:
             remaining = int(
@@ -235,3 +235,9 @@ def _append_ticket_message(ticket: SupportTicket, message) -> None:
         set_committed_value(ticket, "messages", [message])
     else:
         current.append(message)
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
