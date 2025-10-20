@@ -170,3 +170,52 @@ class SupportRepository(BaseRepository):
             select(SupportTicket.priority, func.count()).group_by(SupportTicket.priority)
         )
         return {priority: count for priority, count in result.all()}
+
+    async def count_open_by_user(self, user_id: int) -> int:
+        open_statuses = [
+            SupportTicketStatus.OPEN,
+            SupportTicketStatus.AWAITING_ADMIN,
+            SupportTicketStatus.AWAITING_USER,
+        ]
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(SupportTicket)
+            .where(
+                SupportTicket.user_id == user_id,
+                SupportTicket.status.in_(open_statuses),
+            )
+        )
+        count = result.scalar_one()
+        return int(count or 0)
+
+    async def count_created_since(self, user_id: int, since: datetime) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(SupportTicket)
+            .where(
+                SupportTicket.user_id == user_id,
+                SupportTicket.created_at >= since,
+            )
+        )
+        count = result.scalar_one()
+        return int(count or 0)
+
+    async def last_user_message_time(self, user_id: int) -> datetime | None:
+        result = await self.session.execute(
+            select(func.max(SupportMessage.created_at))
+            .join(SupportTicket, SupportTicket.id == SupportMessage.ticket_id)
+            .where(
+                SupportTicket.user_id == user_id,
+                SupportMessage.author_role == SupportAuthorRole.USER,
+            )
+        )
+        return result.scalar_one()
+
+    async def last_user_message_time_in_ticket(self, ticket_id: int) -> datetime | None:
+        result = await self.session.execute(
+            select(func.max(SupportMessage.created_at)).where(
+                SupportMessage.ticket_id == ticket_id,
+                SupportMessage.author_role == SupportAuthorRole.USER,
+            )
+        )
+        return result.scalar_one()

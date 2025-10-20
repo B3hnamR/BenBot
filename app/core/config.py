@@ -37,6 +37,26 @@ class Settings(BaseSettings):
         alias="MEMBERSHIP_CACHE_TTL",
         description="Number of seconds to cache membership status to reduce API calls.",
     )
+    support_antispam_max_open_tickets: int = Field(
+        5,
+        alias="SUPPORT_ANTISPAM_MAX_OPEN_TICKETS",
+        description="Maximum number of open support tickets per user (0 disables the check).",
+    )
+    support_antispam_max_tickets_per_window: int = Field(
+        3,
+        alias="SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW",
+        description="Maximum number of tickets a user may create within the configured window (0 disables the check).",
+    )
+    support_antispam_window_minutes: int = Field(
+        60,
+        alias="SUPPORT_ANTISPAM_WINDOW_MINUTES",
+        description="Time window in minutes for evaluating new ticket limits.",
+    )
+    support_antispam_min_reply_interval_seconds: int = Field(
+        10,
+        alias="SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS",
+        description="Minimum number of seconds between support messages from the same user (0 disables the check).",
+    )
 
     payment_provider_token: str | None = Field(
         None,

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+import math
+from datetime import datetime, timezone, timedelta
 from typing import Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
+from typing import TYPE_CHECKING
+
 from app.core.enums import SupportAuthorRole, SupportTicketPriority, SupportTicketStatus
 from app.infrastructure.db.models import SupportTicket
 from app.infrastructure.db.repositories import OrderRepository, SupportRepository, UserRepository
+
+if TYPE_CHECKING:
+    from app.services.config_service import ConfigService
 
 
 @dataclass(slots=True)
@@ -158,6 +164,69 @@ class SupportService:
         if ticket.user is None:
             ticket.user = await self._users.get_by_id(ticket.user_id)  # type: ignore[attr-defined]
         return ticket
+
+    async def add_system_message(
+        self,
+        ticket: SupportTicket,
+        *,
+        body: str,
+        payload: dict | None = None,
+    ) -> None:
+        message = await self._tickets.add_message(
+            ticket,
+            role=SupportAuthorRole.SYSTEM,
+            author_id=None,
+            body=body,
+            payload=payload,
+        )
+        _append_ticket_message(ticket, message)
+
+    async def check_new_ticket_limits(
+        self,
+        user_id: int,
+        settings: "ConfigService.SupportAntiSpamSettings",
+    ) -> str | None:
+        if settings.max_open_tickets > 0:
+            open_count = await self._tickets.count_open_by_user(user_id)
+            if open_count >= settings.max_open_tickets:
+                return (
+                    f"You already have {open_count} open ticket(s). "
+                    "Please resolve one before creating another."
+                )
+        if settings.max_tickets_per_window > 0 and settings.window_minutes > 0:
+            window_start = datetime.now(tz=timezone.utc) - timedelta(minutes=settings.window_minutes)
+            recent = await self._tickets.count_created_since(user_id, window_start)
+            if recent >= settings.max_tickets_per_window:
+                return (
+                    "You've reached the limit for new tickets in the current window. "
+                    "Please wait a bit before opening another request."
+                )
+        return None
+
+    async def check_user_message_rate(
+        self,
+        user_id: int,
+        settings: "ConfigService.SupportAntiSpamSettings",
+        *,
+        ticket_id: int | None = None,
+    ) -> str | None:
+        if settings.min_reply_interval_seconds <= 0:
+            return None
+        last_global = await self._tickets.last_user_message_time(user_id)
+        last_ticket = None
+        if ticket_id is not None:
+            last_ticket = await self._tickets.last_user_message_time_in_ticket(ticket_id)
+        timestamps = [ts for ts in (last_global, last_ticket) if ts is not None]
+        if not timestamps:
+            return None
+        latest = max(timestamps)
+        elapsed = (datetime.now(tz=timezone.utc) - latest).total_seconds()
+        if elapsed < settings.min_reply_interval_seconds:
+            remaining = int(
+                max(1, math.ceil(settings.min_reply_interval_seconds - elapsed))
+            )
+            return f"Please wait {remaining} more second(s) before sending another support message."
+        return None
 
 
 def _append_ticket_message(ticket: SupportTicket, message) -> None:

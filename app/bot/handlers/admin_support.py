@@ -16,10 +16,13 @@ from app.bot.keyboards.admin_support import (
     ADMIN_SUPPORT_MENU_ASSIGNED,
     ADMIN_SUPPORT_MENU_AWAITING_USER,
     ADMIN_SUPPORT_MENU_OPEN,
+    ADMIN_SUPPORT_SETTINGS,
+    ADMIN_SUPPORT_SPAM_PREFIX,
     ADMIN_SUPPORT_PRIORITY_PREFIX,
     ADMIN_SUPPORT_REPLY_PREFIX,
     ADMIN_SUPPORT_STATUS_PREFIX,
     ADMIN_SUPPORT_VIEW_PREFIX,
+    admin_support_antispam_keyboard,
     admin_support_list_keyboard,
     admin_support_menu_keyboard,
     admin_support_ticket_keyboard,
@@ -27,6 +30,7 @@ from app.bot.keyboards.admin_support import (
 )
 from app.bot.states.admin_support import AdminSupportState
 from app.core.enums import SupportTicketPriority, SupportTicketStatus
+from app.services.config_service import ConfigService
 from app.services.support_service import SupportService, TicketFilters
 
 router = Router(name="admin_support")
@@ -43,6 +47,59 @@ async def handle_admin_support_menu(callback: CallbackQuery, session: AsyncSessi
     markup = admin_support_menu_keyboard()
     await _safe_edit_message(callback.message, text, markup)
     await callback.answer()
+
+
+@router.callback_query(F.data == ADMIN_SUPPORT_SETTINGS)
+async def handle_admin_support_settings(callback: CallbackQuery, session: AsyncSession) -> None:
+    config_service = ConfigService(session)
+    antispam = await config_service.get_support_antispam_settings()
+    await _safe_edit_message(
+        callback.message,
+        _format_antispam_settings(antispam),
+        admin_support_antispam_keyboard(antispam),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_SUPPORT_SPAM_PREFIX))
+async def handle_admin_support_settings_update(callback: CallbackQuery, session: AsyncSession) -> None:
+    remainder = callback.data.removeprefix(ADMIN_SUPPORT_SPAM_PREFIX)
+    try:
+        field, delta_raw = remainder.split(":")
+    except ValueError:
+        await callback.answer()
+        return
+    if field == "noop":
+        await callback.answer()
+        return
+    try:
+        delta = int(delta_raw)
+    except ValueError:
+        await callback.answer("Invalid change.", show_alert=True)
+        return
+    if delta == 0:
+        await callback.answer()
+        return
+    config_service = ConfigService(session)
+    settings = await config_service.get_support_antispam_settings()
+    if field == "open":
+        settings.max_open_tickets = max(0, settings.max_open_tickets + delta)
+    elif field == "win":
+        settings.window_minutes = max(0, settings.window_minutes + delta)
+    elif field == "winmax":
+        settings.max_tickets_per_window = max(0, settings.max_tickets_per_window + delta)
+    elif field == "delay":
+        settings.min_reply_interval_seconds = max(0, settings.min_reply_interval_seconds + delta)
+    else:
+        await callback.answer()
+        return
+    settings = await config_service.save_support_antispam_settings(settings)
+    await _safe_edit_message(
+        callback.message,
+        _format_antispam_settings(settings),
+        admin_support_antispam_keyboard(settings),
+    )
+    await callback.answer("Updated.")
 
 
 @router.callback_query(F.data.in_({ADMIN_SUPPORT_MENU_OPEN, ADMIN_SUPPORT_MENU_ALL, ADMIN_SUPPORT_MENU_ASSIGNED, ADMIN_SUPPORT_MENU_AWAITING_USER}))
@@ -193,7 +250,29 @@ async def handle_admin_support_status(callback: CallbackQuery, session: AsyncSes
         return
     ticket = await service.ensure_order_loaded(ticket)
     ticket = await service.ensure_user_loaded(ticket)
+    previous_status = ticket.status
     await service.set_status(ticket, status)
+    if status == SupportTicketStatus.RESOLVED and previous_status != SupportTicketStatus.RESOLVED:
+        resolution_text = _format_ticket_resolved_notification(ticket)
+        bot = callback.message.bot if callback.message else None
+        user_chat_id = getattr(getattr(ticket, "user", None), "telegram_id", None)
+        if bot and user_chat_id and user_chat_id != callback.from_user.id:
+            try:
+                await bot.send_message(
+                    user_chat_id,
+                    resolution_text,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        await service.add_system_message(
+            ticket,
+            body="Ticket marked as resolved.",
+            payload={
+                "status": status.value,
+                "admin_id": callback.from_user.id,
+            },
+        )
     data = await state.get_data()
     filter_code = data.get("support_filter", "open")
     page = int(data.get("support_page", 0))
@@ -314,6 +393,32 @@ def _menu_filter_code(callback_data: str) -> str:
     return mapping.get(callback_data, "open")
 
 
+def _format_antispam_settings(settings: ConfigService.SupportAntiSpamSettings) -> str:
+    lines = ["<b>Spam protection</b>", "Configure ticket limits to reduce spam. Use 0 to disable a rule.", ""]
+    max_open = _format_limit_value(settings.max_open_tickets, "ticket")
+    if settings.max_tickets_per_window > 0 and settings.window_minutes > 0:
+        window_limit = (
+            f"{_format_limit_value(settings.max_tickets_per_window, 'ticket')} every "
+            f"{_format_limit_value(settings.window_minutes, 'minute')}"
+        )
+    else:
+        window_limit = "disabled"
+    message_delay = _format_limit_value(settings.min_reply_interval_seconds, "second")
+    window_length = _format_limit_value(settings.window_minutes, "minute")
+    lines.append(f"Max open tickets per user: {max_open}")
+    lines.append(f"Ticket window length: {window_length}")
+    lines.append(f"New tickets per window: {window_limit}")
+    lines.append(f"Minimum delay between user messages: {message_delay}")
+    return "\n".join(lines)
+
+
+def _format_limit_value(value: int, unit: str) -> str:
+    if value <= 0:
+        return "disabled"
+    suffix = unit if value == 1 else f"{unit}s"
+    return f"{value} {suffix}"
+
+
 def _format_support_overview(
     status_counts: dict[SupportTicketStatus, int],
     priority_counts: dict[SupportTicketPriority, int],
@@ -416,6 +521,16 @@ def _format_user_notification(ticket: SupportTicket, body: str) -> str:
         f"Ticket: <code>{ticket.public_id}</code>",
         "",
         body,
+    ]
+    return "\n".join(lines)
+
+
+def _format_ticket_resolved_notification(ticket: SupportTicket) -> str:
+    lines = [
+        "<b>Support update</b>",
+        f"Ticket: <code>{ticket.public_id}</code>",
+        "",
+        "Your ticket has been marked as resolved. Reply in this conversation if you still need help.",
     ]
     return "\n".join(lines)
 

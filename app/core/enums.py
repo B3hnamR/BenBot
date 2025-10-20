@@ -23,6 +23,10 @@ class SettingKey(StrEnum):
     ALERT_ORDER_PAYMENT = "alerts.order.payment"
     ALERT_ORDER_CANCELLED = "alerts.order.cancelled"
     ALERT_ORDER_EXPIRED = "alerts.order.expired"
+    SUPPORT_ANTISPAM_MAX_OPEN_TICKETS = "support.antispam.max_open_tickets"
+    SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW = "support.antispam.max_tickets_per_window"
+    SUPPORT_ANTISPAM_WINDOW_MINUTES = "support.antispam.window_minutes"
+    SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS = "support.antispam.min_reply_interval_seconds"
 
 
 class OrderStatus(StrEnum):

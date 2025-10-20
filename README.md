@@ -7,6 +7,7 @@ Personal Telegram assistant with inline admin control, subscription gate, and fu
 - Inline, button-only navigation for users and administrators (no free-form text needed).
 - OxaPay crypto checkout with configurable currencies, lifetimes, and automatic status sync.
 - Membership enforcement layer that checks required channels and can be toggled per demand.
+- Support desk spam guard with configurable rate limits and automatic user notifications on resolution.
 - Modular product, order, and settings models designed for extension.
 - Structured logging, async database access, and Docker-first deployment.
 
@@ -39,6 +40,7 @@ Key environment variables (see `.env.example`):
 - `BOT_OWNER_USER_IDS`: Comma-separated Telegram user IDs allowed to access admin features.
 - `REQUIRE_SUBSCRIPTION_DEFAULT`: Default toggle for membership enforcement (true/false).
 - `REQUIRED_CHANNELS_DEFAULT`: Comma-separated channel usernames to enforce subscription.
+- `SUPPORT_ANTISPAM_MAX_OPEN_TICKETS`, `SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW`, `SUPPORT_ANTISPAM_WINDOW_MINUTES`, `SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS`: Base anti-spam thresholds for the support desk (also adjustable from the admin panel).
 - `PAYMENT_PROVIDER_TOKEN`, `PAYMENT_CURRENCY`, `INVOICE_PAYMENT_TIMEOUT_MINUTES`: defaults for payment flows.
 - **OxaPay crypto payments**:
   - `OXAPAY_API_KEY`: Merchant API key from the OxaPay dashboard (required to enable crypto checkout).

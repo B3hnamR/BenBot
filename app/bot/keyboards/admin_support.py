@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.bot.keyboards.admin import AdminMenuCallback
 from app.core.enums import SupportTicketPriority, SupportTicketStatus
 from app.infrastructure.db.models import SupportTicket
+
+if TYPE_CHECKING:
+    from app.services.config_service import ConfigService
 
 ADMIN_SUPPORT_MENU_OPEN = "admin:sup:open"
 ADMIN_SUPPORT_MENU_ALL = "admin:sup:all"
 ADMIN_SUPPORT_MENU_ASSIGNED = "admin:sup:mine"
 ADMIN_SUPPORT_MENU_AWAITING_USER = "admin:sup:await_user"
+ADMIN_SUPPORT_SETTINGS = "admin:sup:settings"
 
 ADMIN_SUPPORT_LIST_PREFIX = "admin:sup:list:"
 ADMIN_SUPPORT_VIEW_PREFIX = "admin:sup:view:"
@@ -19,6 +24,7 @@ ADMIN_SUPPORT_REPLY_PREFIX = "admin:sup:reply:"
 ADMIN_SUPPORT_STATUS_PREFIX = "as:st:"
 ADMIN_SUPPORT_ASSIGN_PREFIX = "admin:sup:assign:"
 ADMIN_SUPPORT_PRIORITY_PREFIX = "admin:sup:priority:"
+ADMIN_SUPPORT_SPAM_PREFIX = "as:sp:"
 
 _STATUS_CODE_MAP: dict[SupportTicketStatus, str] = {
     SupportTicketStatus.OPEN: "op",
@@ -44,6 +50,7 @@ def admin_support_menu_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Assigned to me", callback_data=ADMIN_SUPPORT_MENU_ASSIGNED)
     builder.button(text="Awaiting customer", callback_data=ADMIN_SUPPORT_MENU_AWAITING_USER)
     builder.button(text="All tickets", callback_data=ADMIN_SUPPORT_MENU_ALL)
+    builder.button(text="Spam guard", callback_data=ADMIN_SUPPORT_SETTINGS)
     builder.button(text="Back", callback_data="admin:back_to_main")
     builder.adjust(1)
     return builder.as_markup()
@@ -161,3 +168,55 @@ def _next_priority(current: SupportTicketPriority) -> SupportTicketPriority:
     ]
     idx = order.index(current)
     return order[(idx + 1) % len(order)]
+
+
+def admin_support_antispam_keyboard(
+    settings: "ConfigService.SupportAntiSpamSettings",
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="Max open -",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}open:-1",
+        ),
+        InlineKeyboardButton(
+            text="Max open +",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}open:+1",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Window min -5",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}win:-5",
+        ),
+        InlineKeyboardButton(
+            text="Window min +5",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}win:+5",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Per window -",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}winmax:-1",
+        ),
+        InlineKeyboardButton(
+            text="Per window +",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}winmax:+1",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Delay s -5",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}delay:-5",
+        ),
+        InlineKeyboardButton(
+            text="Delay s +5",
+            callback_data=f"{ADMIN_SUPPORT_SPAM_PREFIX}delay:+5",
+        ),
+    )
+    builder.button(
+        text="Back",
+        callback_data=AdminMenuCallback.MANAGE_SUPPORT.value,
+    )
+    builder.adjust(2, 2, 2, 2, 1)
+    return builder.as_markup()

@@ -35,6 +35,7 @@ from app.core.enums import SupportTicketPriority, SupportTicketStatus
 from app.infrastructure.db.repositories import OrderRepository, UserRepository
 from app.infrastructure.db.models import SupportTicket
 from app.services.order_service import OrderService
+from app.services.config_service import ConfigService
 from app.services.support_service import SupportService
 
 router = Router(name="support")
@@ -146,6 +147,17 @@ async def handle_support_message(
         return
 
     profile = await _ensure_profile(session, message.from_user.id)
+    config_service = ConfigService(session)
+    antispam = await config_service.get_support_antispam_settings()
+    service = SupportService(session)
+    violation = await service.check_user_message_rate(profile.id, antispam)
+    if violation:
+        await message.answer(violation)
+        return
+    violation = await service.check_new_ticket_limits(profile.id, antispam)
+    if violation:
+        await message.answer(violation)
+        return
     data = await state.get_data()
     subject = data.get("support_subject")
     if not subject:
@@ -163,7 +175,6 @@ async def handle_support_message(
             order_id = order.id
 
     category = data.get("support_category")
-    service = SupportService(session)
     ticket = await service.create_ticket(
         user_id=profile.id,
         subject=subject,
@@ -272,6 +283,12 @@ async def handle_support_ticket_reply_message(
         await message.answer("Ticket no longer exists.")
         await state.set_state(SupportState.menu)
         return
+    config_service = ConfigService(session)
+    antispam = await config_service.get_support_antispam_settings()
+    violation = await service.check_user_message_rate(profile.id, antispam, ticket_id=ticket.id)
+    if violation:
+        await message.answer(violation)
+        return
 
     await service.add_user_message(
         ticket,
@@ -311,6 +328,14 @@ async def _start_ticket_creation(
     *,
     order_public_id: str | None,
 ) -> None:
+    profile = await _ensure_profile(session, callback.from_user.id)
+    config_service = ConfigService(session)
+    antispam = await config_service.get_support_antispam_settings()
+    service = SupportService(session)
+    violation = await service.check_new_ticket_limits(profile.id, antispam)
+    if violation:
+        await callback.answer(violation, show_alert=True)
+        return
     await state.update_data(
         support_category=None,
         support_subject=None,

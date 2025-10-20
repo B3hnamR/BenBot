@@ -35,6 +35,13 @@ class ConfigService:
         notify_cancellation: bool
         notify_expiration: bool
 
+    @dataclass
+    class SupportAntiSpamSettings:
+        max_open_tickets: int
+        max_tickets_per_window: int
+        window_minutes: int
+        min_reply_interval_seconds: int
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._settings_repo = SettingsRepository(session)
@@ -191,6 +198,34 @@ class ConfigService:
                 True,
             ),
         )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_MAX_OPEN_TICKETS,
+            await self._ensure_value_default(
+                SettingKey.SUPPORT_ANTISPAM_MAX_OPEN_TICKETS,
+                self._env_settings.support_antispam_max_open_tickets,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW,
+            await self._ensure_value_default(
+                SettingKey.SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW,
+                self._env_settings.support_antispam_max_tickets_per_window,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_WINDOW_MINUTES,
+            await self._ensure_value_default(
+                SettingKey.SUPPORT_ANTISPAM_WINDOW_MINUTES,
+                self._env_settings.support_antispam_window_minutes,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS,
+            await self._ensure_value_default(
+                SettingKey.SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS,
+                self._env_settings.support_antispam_min_reply_interval_seconds,
+            ),
+        )
 
         if self._env_settings.required_channels_default:
             existing = await self._channel_repo.list_active()
@@ -310,6 +345,64 @@ class ConfigService:
             bool(config.notify_expiration),
         )
         return await self.get_alert_settings()
+
+    async def get_support_antispam_settings(self) -> "ConfigService.SupportAntiSpamSettings":
+        max_open = self._safe_int(
+            await self._settings_repo.get_value(
+                SettingKey.SUPPORT_ANTISPAM_MAX_OPEN_TICKETS,
+                default=self._env_settings.support_antispam_max_open_tickets,
+            ),
+            self._env_settings.support_antispam_max_open_tickets,
+        )
+        max_window = self._safe_int(
+            await self._settings_repo.get_value(
+                SettingKey.SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW,
+                default=self._env_settings.support_antispam_max_tickets_per_window,
+            ),
+            self._env_settings.support_antispam_max_tickets_per_window,
+        )
+        window_minutes = self._safe_int(
+            await self._settings_repo.get_value(
+                SettingKey.SUPPORT_ANTISPAM_WINDOW_MINUTES,
+                default=self._env_settings.support_antispam_window_minutes,
+            ),
+            self._env_settings.support_antispam_window_minutes,
+        )
+        min_interval = self._safe_int(
+            await self._settings_repo.get_value(
+                SettingKey.SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS,
+                default=self._env_settings.support_antispam_min_reply_interval_seconds,
+            ),
+            self._env_settings.support_antispam_min_reply_interval_seconds,
+        )
+        return self.SupportAntiSpamSettings(
+            max_open_tickets=max(0, max_open),
+            max_tickets_per_window=max(0, max_window),
+            window_minutes=max(0, window_minutes),
+            min_reply_interval_seconds=max(0, min_interval),
+        )
+
+    async def save_support_antispam_settings(
+        self,
+        config: "ConfigService.SupportAntiSpamSettings",
+    ) -> "ConfigService.SupportAntiSpamSettings":
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_MAX_OPEN_TICKETS,
+            max(0, int(config.max_open_tickets)),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW,
+            max(0, int(config.max_tickets_per_window)),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_WINDOW_MINUTES,
+            max(0, int(config.window_minutes)),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS,
+            max(0, int(config.min_reply_interval_seconds)),
+        )
+        return await self.get_support_antispam_settings()
 
     async def get_crypto_settings(self) -> CryptoSettings:
         enabled = self._to_bool(
