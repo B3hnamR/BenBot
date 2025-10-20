@@ -12,6 +12,7 @@ require_cmd() {
 }
 
 require_cmd docker
+require_cmd git
 
 if docker compose version >/dev/null 2>&1; then
   DOCKER_COMPOSE_CMD=(docker compose)
@@ -29,7 +30,7 @@ random_password() {
     python - <<'PY'
 import secrets
 import string
-alphabet = string.ascii_letters + string.digits + string.punctuation
+alphabet = string.ascii_letters + string.digits
 print(''.join(secrets.choice(alphabet) for _ in range(32)))
 PY
   fi
@@ -57,11 +58,7 @@ else
 fi
 
 read -rp "Required channel usernames (comma separated, optional): " REQUIRED_CHANNELS_INPUT
-if [[ -n "$REQUIRED_CHANNELS_INPUT" ]]; then
-  REQUIRED_CHANNELS="['${REQUIRED_CHANNELS_INPUT//,/","}' ]"
-else
-  REQUIRED_CHANNELS="[]"
-fi
+REQUIRED_CHANNELS=$(echo "$REQUIRED_CHANNELS_INPUT" | tr -d '[:space:]')
 read -rp "Payment provider token (optional): " PAYMENT_PROVIDER_TOKEN
 read -rp "Payment currency [USD]: " PAYMENT_CURRENCY
 PAYMENT_CURRENCY=${PAYMENT_CURRENCY:-USD}
@@ -98,6 +95,11 @@ MEMBERSHIP_CACHE_TTL=300
 PAYMENT_PROVIDER_TOKEN=$PAYMENT_PROVIDER_TOKEN
 PAYMENT_CURRENCY=$PAYMENT_CURRENCY
 INVOICE_PAYMENT_TIMEOUT_MINUTES=$INVOICE_TIMEOUT
+
+SUPPORT_ANTISPAM_MAX_OPEN_TICKETS=5
+SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW=3
+SUPPORT_ANTISPAM_WINDOW_MINUTES=60
+SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS=10
 EOF
 
 echo "Generated .env with random database credentials."
@@ -105,4 +107,5 @@ echo "Generated .env with random database credentials."
 echo "Building and starting containers..."
 "${DOCKER_COMPOSE_CMD[@]}" up -d --build
 
-echo "Setup complete. Containers are running."
+echo "Setup complete."
+echo "Monitor startup with: ${DOCKER_COMPOSE_CMD[*]} logs -f bot"
