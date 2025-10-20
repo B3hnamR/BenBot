@@ -29,3 +29,18 @@ class Product(IntPKMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="ProductQuestion.position.asc()",
     )
+    related_products: Mapped[list["ProductRelation"]] = relationship(
+        "ProductRelation",
+        foreign_keys="ProductRelation.product_id",
+        back_populates="product",
+        cascade="all, delete-orphan",
+    )
+    related_to: Mapped[list["ProductRelation"]] = relationship(
+        "ProductRelation",
+        foreign_keys="ProductRelation.related_product_id",
+        back_populates="related_product",
+        cascade="all, delete-orphan",
+    )
+
+
+from app.infrastructure.db.models.product_relation import ProductRelation  # noqa: E402

@@ -71,3 +71,23 @@ class SupportAuthorRole(StrEnum):
     USER = "user"
     ADMIN = "admin"
     SYSTEM = "system"
+
+
+class CartStatus(StrEnum):
+    ACTIVE = "active"
+    CHECKED_OUT = "checked_out"
+    ABANDONED = "abandoned"
+
+
+class CartAdjustmentType(StrEnum):
+    PROMOTION = "promotion"
+    TAX = "tax"
+    SHIPPING = "shipping"
+    FEE = "fee"
+
+
+class ProductRelationType(StrEnum):
+    RELATED = "related"
+    UPSELL = "upsell"
+    CROSS_SELL = "cross_sell"
+    ACCESSORY = "accessory"
