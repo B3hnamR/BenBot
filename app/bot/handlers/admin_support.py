@@ -28,6 +28,7 @@ from app.bot.keyboards.admin_support import (
     admin_support_ticket_keyboard,
     decode_status_code,
 )
+from app.bot.keyboards.support import support_ticket_notification_keyboard
 from app.bot.states.admin_support import AdminSupportState
 from app.core.enums import SupportTicketPriority, SupportTicketStatus
 from app.services.config_service import ConfigService
@@ -208,6 +209,7 @@ async def handle_admin_support_reply_message(
             await message.bot.send_message(
                 user_chat_id,
                 _format_user_notification(ticket, text),
+                reply_markup=support_ticket_notification_keyboard(ticket),
                 disable_web_page_preview=True,
             )
         except Exception:
@@ -261,6 +263,7 @@ async def handle_admin_support_status(callback: CallbackQuery, session: AsyncSes
                 await bot.send_message(
                     user_chat_id,
                     resolution_text,
+                    reply_markup=support_ticket_notification_keyboard(ticket),
                     disable_web_page_preview=True,
                 )
             except Exception:

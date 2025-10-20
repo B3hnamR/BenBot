@@ -137,6 +137,15 @@ def support_ticket_detail_keyboard(ticket: SupportTicket) -> InlineKeyboardMarku
     return builder.as_markup()
 
 
+def support_ticket_notification_keyboard(ticket: SupportTicket) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="View ticket",
+        callback_data=f"{SUPPORT_TICKET_VIEW_PREFIX}{ticket.public_id}",
+    )
+    return builder.as_markup()
+
+
 def _ticket_summary_line(ticket: SupportTicket) -> str:
     status = ticket.status.value.replace("_", " ").title()
     subject = ticket.subject[:40]
