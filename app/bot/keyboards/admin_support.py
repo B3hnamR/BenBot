@@ -16,9 +16,26 @@ ADMIN_SUPPORT_MENU_AWAITING_USER = "admin:sup:await_user"
 ADMIN_SUPPORT_LIST_PREFIX = "admin:sup:list:"
 ADMIN_SUPPORT_VIEW_PREFIX = "admin:sup:view:"
 ADMIN_SUPPORT_REPLY_PREFIX = "admin:sup:reply:"
-ADMIN_SUPPORT_STATUS_PREFIX = "admin:sup:status:"
+ADMIN_SUPPORT_STATUS_PREFIX = "as:st:"
 ADMIN_SUPPORT_ASSIGN_PREFIX = "admin:sup:assign:"
 ADMIN_SUPPORT_PRIORITY_PREFIX = "admin:sup:priority:"
+
+_STATUS_CODE_MAP: dict[SupportTicketStatus, str] = {
+    SupportTicketStatus.OPEN: "op",
+    SupportTicketStatus.RESOLVED: "rs",
+    SupportTicketStatus.AWAITING_USER: "au",
+    SupportTicketStatus.AWAITING_ADMIN: "aa",
+    SupportTicketStatus.ARCHIVED: "ar",
+}
+_STATUS_CODE_REVERSE: dict[str, SupportTicketStatus] = {code: status for status, code in _STATUS_CODE_MAP.items()}
+
+
+def encode_status_code(status: SupportTicketStatus) -> str:
+    return _STATUS_CODE_MAP[status]
+
+
+def decode_status_code(code: str) -> SupportTicketStatus | None:
+    return _STATUS_CODE_REVERSE.get(code)
 
 
 def admin_support_menu_keyboard() -> InlineKeyboardMarkup:
@@ -98,20 +115,20 @@ def admin_support_ticket_keyboard(
     if ticket.status in {SupportTicketStatus.RESOLVED, SupportTicketStatus.ARCHIVED}:
         builder.button(
             text="Reopen",
-            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{SupportTicketStatus.OPEN.value}",
+            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{encode_status_code(SupportTicketStatus.OPEN)}",
         )
     else:
         builder.button(
             text="Mark resolved",
-            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{SupportTicketStatus.RESOLVED.value}",
+            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{encode_status_code(SupportTicketStatus.RESOLVED)}",
         )
         builder.button(
             text="Awaiting customer",
-            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{SupportTicketStatus.AWAITING_USER.value}",
+            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{encode_status_code(SupportTicketStatus.AWAITING_USER)}",
         )
         builder.button(
             text="Awaiting admin",
-            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{SupportTicketStatus.AWAITING_ADMIN.value}",
+            callback_data=f"{ADMIN_SUPPORT_STATUS_PREFIX}{ticket.public_id}:{encode_status_code(SupportTicketStatus.AWAITING_ADMIN)}",
         )
 
     next_priority = _next_priority(ticket.priority)

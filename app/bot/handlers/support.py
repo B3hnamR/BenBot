@@ -209,11 +209,14 @@ async def handle_support_ticket_page(callback: CallbackQuery, session: AsyncSess
 @router.callback_query(F.data.startswith(SUPPORT_TICKET_VIEW_PREFIX))
 async def handle_support_ticket_view(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     public_id = callback.data.removeprefix(SUPPORT_TICKET_VIEW_PREFIX)
-    ticket = await SupportService(session).get_ticket_by_public_id(public_id)
+    service = SupportService(session)
+    ticket = await service.get_ticket_by_public_id(public_id)
     profile = await _ensure_profile(session, callback.from_user.id)
     if ticket is None or ticket.user_id != profile.id:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    await service.ensure_user_loaded(ticket)
+    await service.ensure_order_loaded(ticket)
     await state.set_state(SupportState.menu)
     await _safe_edit_message(
         callback.message,
@@ -226,11 +229,14 @@ async def handle_support_ticket_view(callback: CallbackQuery, session: AsyncSess
 @router.callback_query(F.data.startswith(SUPPORT_TICKET_REPLY_PREFIX))
 async def handle_support_ticket_reply(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     public_id = callback.data.removeprefix(SUPPORT_TICKET_REPLY_PREFIX)
-    ticket = await SupportService(session).get_ticket_by_public_id(public_id)
+    service = SupportService(session)
+    ticket = await service.get_ticket_by_public_id(public_id)
     profile = await _ensure_profile(session, callback.from_user.id)
     if ticket is None or ticket.user_id != profile.id:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    await service.ensure_user_loaded(ticket)
+    await service.ensure_order_loaded(ticket)
     await state.set_state(SupportState.replying)
     await state.update_data(active_ticket=public_id)
     await callback.message.answer("Send your reply. Use /cancel to stop replying.")
@@ -480,12 +486,18 @@ async def _notify_admins_new_ticket(bot, ticket: SupportTicket) -> None:
         return
     body = ticket.messages[-1].body if ticket.messages else ""
     message = _format_admin_ticket_alert(ticket, body, is_new=True)
+    markup = _admin_ticket_notification_keyboard(ticket)
     user_id = getattr(getattr(ticket, "user", None), "telegram_id", None)
     for admin_id in recipients:
         if admin_id is None or admin_id == user_id:
             continue
         try:
-            await bot.send_message(admin_id, message, disable_web_page_preview=True)
+            await bot.send_message(
+                admin_id,
+                message,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
         except Exception:
             continue
 
@@ -501,11 +513,17 @@ async def _notify_admins_ticket_update(bot, ticket: SupportTicket, body: str) ->
     if not recipients:
         return
     message = _format_admin_ticket_alert(ticket, body, is_new=False)
+    markup = _admin_ticket_notification_keyboard(ticket)
     for admin_id in recipients:
         if admin_id is None:
             continue
         try:
-            await bot.send_message(admin_id, message, disable_web_page_preview=True)
+            await bot.send_message(
+                admin_id,
+                message,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
         except Exception:
             continue
 
@@ -525,6 +543,19 @@ def _format_admin_ticket_alert(ticket: SupportTicket, body: str, *, is_new: bool
     lines.append("")
     lines.append(body or "(no message)")
     return "\n".join(lines)
+
+
+def _admin_ticket_notification_keyboard(ticket: SupportTicket) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="View ticket",
+                    callback_data=f"{ADMIN_SUPPORT_VIEW_PREFIX}{ticket.public_id}",
+                )
+            ]
+        ]
+    )
 
 
 async def _ensure_profile(session: AsyncSession, telegram_id: int):

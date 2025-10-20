@@ -23,6 +23,7 @@ from app.bot.keyboards.admin_support import (
     admin_support_list_keyboard,
     admin_support_menu_keyboard,
     admin_support_ticket_keyboard,
+    decode_status_code,
 )
 from app.bot.states.admin_support import AdminSupportState
 from app.core.enums import SupportTicketPriority, SupportTicketStatus
@@ -74,6 +75,8 @@ async def handle_admin_support_view_ticket(callback: CallbackQuery, session: Asy
     if ticket is None:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
     await state.update_data(active_support_ticket=public_id)
     data = await state.get_data()
     filter_code = data.get("support_filter", "open")
@@ -94,6 +97,8 @@ async def handle_admin_support_reply(callback: CallbackQuery, session: AsyncSess
     if ticket is None:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
     await state.set_state(AdminSupportState.replying)
     await state.update_data(active_support_ticket=public_id)
     await callback.message.answer("Send your reply. Use /cancel to abort.")
@@ -131,6 +136,8 @@ async def handle_admin_support_reply_message(
         await state.set_state(None)
         await message.answer("Ticket no longer exists.")
         return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
 
     await service.add_admin_message(
         ticket,
@@ -170,10 +177,13 @@ async def handle_admin_support_reply_message(
 @router.callback_query(F.data.startswith(ADMIN_SUPPORT_STATUS_PREFIX))
 async def handle_admin_support_status(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     remainder = callback.data.removeprefix(ADMIN_SUPPORT_STATUS_PREFIX)
-    ticket_id, status_value = remainder.split(":")
     try:
-        status = SupportTicketStatus(status_value)
+        ticket_id, status_code = remainder.split(":", 1)
     except ValueError:
+        await callback.answer("Invalid status.", show_alert=True)
+        return
+    status = decode_status_code(status_code)
+    if status is None:
         await callback.answer("Invalid status.", show_alert=True)
         return
     service = SupportService(session)
@@ -181,6 +191,8 @@ async def handle_admin_support_status(callback: CallbackQuery, session: AsyncSes
     if ticket is None:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
     await service.set_status(ticket, status)
     data = await state.get_data()
     filter_code = data.get("support_filter", "open")
@@ -202,6 +214,8 @@ async def handle_admin_support_assign(callback: CallbackQuery, session: AsyncSes
     if ticket is None:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
     if target == "me":
         await service.assign_admin(ticket, callback.from_user.id)
     else:
@@ -231,6 +245,8 @@ async def handle_admin_support_priority(callback: CallbackQuery, session: AsyncS
     if ticket is None:
         await callback.answer("Ticket not found.", show_alert=True)
         return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
     await service.set_priority(ticket, priority)
     data = await state.get_data()
     filter_code = data.get("support_filter", "open")
