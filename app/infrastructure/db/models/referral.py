@@ -31,7 +31,7 @@ class ReferralLink(IntPKMixin, TimestampMixin, Base):
     total_signups: Mapped[int] = mapped_column(default=0, nullable=False)
     total_orders: Mapped[int] = mapped_column(default=0, nullable=False)
 
-    owner: Mapped["UserProfile"] = relationship("UserProfile", back_populates="referral_links")
+    owner: Mapped[UserProfile] = relationship("UserProfile", back_populates="referral_links")
     enrollments: Mapped[list["ReferralEnrollment"]] = relationship(
         "ReferralEnrollment",
         back_populates="link",
@@ -54,7 +54,7 @@ class ReferralEnrollment(IntPKMixin, TimestampMixin, Base):
     meta: Mapped[dict | None] = mapped_column(JSON())
 
     link: Mapped[ReferralLink] = relationship("ReferralLink", back_populates="enrollments")
-    referred_user: Mapped["UserProfile" | None] = relationship("UserProfile")
+    referred_user: Mapped[UserProfile | None] = relationship("UserProfile")
 
 
 class ReferralReward(IntPKMixin, TimestampMixin, Base):
@@ -77,8 +77,8 @@ class ReferralReward(IntPKMixin, TimestampMixin, Base):
     rewarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     link: Mapped[ReferralLink] = relationship("ReferralLink", back_populates="rewards")
-    referred_user: Mapped["UserProfile" | None] = relationship("UserProfile")
-    loyalty_transaction: Mapped["LoyaltyTransaction" | None] = relationship("LoyaltyTransaction")
+    referred_user: Mapped[UserProfile | None] = relationship("UserProfile")
+    loyalty_transaction: Mapped[LoyaltyTransaction | None] = relationship("LoyaltyTransaction")
 
 
 from app.infrastructure.db.models.loyalty import LoyaltyTransaction  # noqa: E402
