@@ -23,7 +23,7 @@ class UserProfile(IntPKMixin, TimestampMixin, Base):
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="user")
     support_tickets: Mapped[list["SupportTicket"]] = relationship("SupportTicket", back_populates="user")
     carts: Mapped[list["ShoppingCart"]] = relationship("ShoppingCart", back_populates="user")
-    loyalty_account: Mapped["LoyaltyAccount"] | None = relationship("LoyaltyAccount", back_populates="user", uselist=False)
+    loyalty_account: Mapped["LoyaltyAccount"] = relationship("LoyaltyAccount", back_populates="user", uselist=False)
     referral_links: Mapped[list["ReferralLink"]] = relationship("ReferralLink", back_populates="owner")
 
     def display_name(self) -> str:
