@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import DateTime, Enum, ForeignKey, JSON, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -54,7 +55,7 @@ class ReferralEnrollment(IntPKMixin, TimestampMixin, Base):
     meta: Mapped[dict | None] = mapped_column(JSON())
 
     link: Mapped[ReferralLink] = relationship("ReferralLink", back_populates="enrollments")
-    referred_user: Mapped[UserProfile | None] = relationship("UserProfile")
+    referred_user: Mapped[Optional[UserProfile]] = relationship("UserProfile")
 
 
 class ReferralReward(IntPKMixin, TimestampMixin, Base):
@@ -77,8 +78,8 @@ class ReferralReward(IntPKMixin, TimestampMixin, Base):
     rewarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     link: Mapped[ReferralLink] = relationship("ReferralLink", back_populates="rewards")
-    referred_user: Mapped[UserProfile | None] = relationship("UserProfile")
-    loyalty_transaction: Mapped[LoyaltyTransaction | None] = relationship("LoyaltyTransaction")
+    referred_user: Mapped[Optional[UserProfile]] = relationship("UserProfile")
+    loyalty_transaction: Mapped[Optional[LoyaltyTransaction]] = relationship("LoyaltyTransaction")
 
 
 from app.infrastructure.db.models.loyalty import LoyaltyTransaction  # noqa: E402

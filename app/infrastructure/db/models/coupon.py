@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -64,7 +65,7 @@ class CouponRedemption(IntPKMixin, TimestampMixin, Base):
 
     coupon: Mapped[Coupon] = relationship("Coupon", back_populates="redemptions")
     user: Mapped["UserProfile"] = relationship("UserProfile")
-    order: Mapped["Order" | None] = relationship("Order")
+    order: Mapped[Optional[Order]] = relationship("Order")
 
 
 from app.infrastructure.db.models.order import Order  # noqa: E402
