@@ -91,3 +91,26 @@ class ProductRelationType(StrEnum):
     UPSELL = "upsell"
     CROSS_SELL = "cross_sell"
     ACCESSORY = "accessory"
+
+
+class LoyaltyTransactionType(StrEnum):
+    EARN = "earn"
+    REDEEM = "redeem"
+    ADJUST = "adjust"
+
+
+class CouponType(StrEnum):
+    PERCENT = "percent"
+    FIXED = "fixed"
+    SHIPPING = "shipping"
+
+
+class CouponStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    EXPIRED = "expired"
+
+
+class ReferralRewardType(StrEnum):
+    BONUS = "bonus"
+    COMMISSION = "commission"

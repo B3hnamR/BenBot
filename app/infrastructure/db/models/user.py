@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 
@@ -23,6 +23,8 @@ class UserProfile(IntPKMixin, TimestampMixin, Base):
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="user")
     support_tickets: Mapped[list["SupportTicket"]] = relationship("SupportTicket", back_populates="user")
     carts: Mapped[list["ShoppingCart"]] = relationship("ShoppingCart", back_populates="user")
+    loyalty_account: Mapped["LoyaltyAccount" | None] = relationship("LoyaltyAccount", back_populates="user", uselist=False)
+    referral_links: Mapped[list["ReferralLink"]] = relationship("ReferralLink", back_populates="owner")
 
     def display_name(self) -> str:
         if self.first_name and self.last_name:
@@ -37,3 +39,5 @@ class UserProfile(IntPKMixin, TimestampMixin, Base):
 from app.infrastructure.db.models.cart import ShoppingCart  # noqa: E402
 from app.infrastructure.db.models.order import Order  # noqa: E402
 from app.infrastructure.db.models.support import SupportTicket  # noqa: E402
+from app.infrastructure.db.models.loyalty import LoyaltyAccount  # noqa: E402
+from app.infrastructure.db.models.referral import ReferralLink  # noqa: E402
