@@ -33,6 +33,7 @@ from app.core.config import get_settings
 from app.core.enums import OrderStatus, ProductQuestionType
 from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import UserRepository
+from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import (
     CryptoInvoiceResult,
