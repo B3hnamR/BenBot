@@ -1,6 +1,6 @@
 from aiogram import Dispatcher
 
-from . import admin, admin_payments, admin_products, admin_support, admin_users, common, products, support
+from . import admin, admin_payments, admin_products, admin_support, admin_users, cart, common, products, support
 from ..middlewares import OwnerAccessMiddleware
 
 
@@ -18,6 +18,7 @@ def register_handlers(dispatcher: Dispatcher, owner_middleware: OwnerAccessMiddl
 
     dispatcher.include_router(support.router)
     dispatcher.include_router(common.router)
+    dispatcher.include_router(cart.router)
     dispatcher.include_router(products.router)
     dispatcher.include_router(admin_payments.router)
     dispatcher.include_router(admin_support.router)
