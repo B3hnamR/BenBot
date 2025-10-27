@@ -46,6 +46,9 @@ class OrderService:
         product: Product,
         answers: Iterable[tuple[str, str | None]],
         invoice_timeout_minutes: int,
+        total_override: Decimal | None = None,
+        currency_override: str | None = None,
+        extra_attrs: dict | None = None,
     ) -> Order:
         if not product.is_active:
             raise OrderCreationError("Product is not active.")
@@ -56,13 +59,16 @@ class OrderService:
                 minutes=invoice_timeout_minutes
             )
 
+        amount = total_override if total_override is not None else Decimal(product.price)
+        currency = currency_override if currency_override is not None else product.currency
+
         order = await self._orders.create_order(
             user_id=user_id,
             product_id=product.id,
-            amount=Decimal(product.price),
-            currency=product.currency,
+            amount=amount,
+            currency=currency,
             expires_at=expires_at,
-            extra_attrs=None,
+            extra_attrs=extra_attrs,
         )
         order.status = OrderStatus.AWAITING_PAYMENT
 

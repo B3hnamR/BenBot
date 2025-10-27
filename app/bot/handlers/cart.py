@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from decimal import Decimal
 from typing import Optional
@@ -15,12 +15,19 @@ from app.bot.keyboards.cart import (
     CART_QTY_PREFIX,
     CART_REFRESH_CALLBACK,
     CART_REMOVE_PREFIX,
+    CART_CONFIRM_ORDER,
+    CART_CANCEL_CHECKOUT,
     cart_menu_keyboard,
+    cart_checkout_confirmation_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.infrastructure.db.repositories import UserRepository
 from app.services.cart_service import CartService
 from app.services.product_service import ProductService
+from app.services.config_service import ConfigService
+from app.services.order_service import OrderService
+from app.services.crypto_payment_service import CryptoPaymentService
+from app.bot.states.order import OrderFlowState
 
 router = Router(name="cart")
 
@@ -108,23 +115,139 @@ async def handle_cart_checkout(callback: CallbackQuery, session: AsyncSession, s
         await _render_cart(callback, session)
         return
 
-    product_queue: list[int] = []
+    totals = await cart_service.refresh_totals(cart)
+    items_snapshot = []
     for item in cart.items:
-        product_queue.extend([item.product_id] * max(1, item.quantity))
+        title = item.title_override or getattr(item.product, "name", "Item")
+        items_snapshot.append(
+            {
+                "product_id": item.product_id,
+                "name": title,
+                "quantity": item.quantity,
+                "unit_price": str(item.unit_price),
+                "total_amount": str(item.total_amount),
+                "currency": item.currency,
+            }
+        )
 
     await state.update_data(
-        cart_checkout_queue=product_queue,
+        cart_checkout_queue=items_snapshot,
         cart_checkout_index=0,
+        cart_answers=[],
+        cart_totals={
+            "subtotal": str(totals.subtotal),
+            "discount": str(totals.discount),
+            "tax": str(totals.tax),
+            "shipping": str(totals.shipping),
+            "total": str(totals.total),
+        },
+        cart_currency=cart.currency,
         cart_id=cart.id,
     )
+
     await callback.answer("Starting checkout...")
     product_service = ProductService(session)
-    first_product = await product_service.get_product(product_queue[0])
+    first_product = await product_service.get_product(items_snapshot[0]["product_id"])
     if first_product is None:
         await _render_cart(callback, session, notice="First product unavailable; please refresh.")
         return
 
-    await _start_product_flow(callback, session, state, first_product.id, origin="cart")
+    await _start_product_flow(callback, session, state, first_product.id, origin="cart", item_index=0)
+
+
+@router.callback_query(OrderFlowState.cart_confirm, F.data == CART_CONFIRM_ORDER)
+async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    data = await state.get_data()
+    cart_queue = data.get("cart_checkout_queue") or []
+    totals = data.get("cart_totals") or {}
+    answers = data.get("cart_answers") or []
+    currency = data.get("cart_currency") or "USD"
+
+    if not cart_queue:
+        await callback.answer("Cart is empty.", show_alert=True)
+        await state.clear()
+        await _render_cart(callback, session)
+        return
+
+    profile = await _ensure_profile(session, callback.from_user.id)
+    order_service = OrderService(session)
+    product = await order_service.get_product(cart_queue[0]["product_id"])
+    if product is None:
+        await callback.answer("A product in your cart is no longer available.", show_alert=True)
+        await state.clear()
+        await _render_cart(callback, session)
+        return
+
+    config_service = ConfigService(session)
+    timeout_minutes = await config_service.invoice_timeout_minutes()
+
+    total_amount = Decimal(totals.get("total", "0"))
+    extra_attrs = {
+        "cart_items": cart_queue,
+        "cart_answers": answers,
+        "cart_totals": totals,
+    }
+
+    order = await order_service.create_order(
+        user_id=profile.id,
+        product=product,
+        answers=[],
+        invoice_timeout_minutes=timeout_minutes,
+        total_override=total_amount,
+        currency_override=currency,
+        extra_attrs=extra_attrs,
+    )
+
+    email = _extract_cart_email(answers)
+    crypto_service = CryptoPaymentService(session)
+    crypto_result = await crypto_service.create_invoice_for_order(
+        order,
+        description=f"Cart order ({order.public_id})",
+        email=email,
+    )
+
+    cart_service = CartService(session)
+    cart = await cart_service.get_active_cart(profile.id)
+    if cart is not None:
+        await cart_service.clear_cart(cart)
+
+    summary_text = _format_cart_summary(cart_queue, totals, currency, include_header=True)
+    admin_summary = "; ".join(f"{item['name']} x{item['quantity']}" for item in cart_queue)
+    admin_answers = [{"key": "Cart items", "prompt": "Cart items", "value": admin_summary}]
+
+    from app.bot.handlers.products import _order_confirmation_keyboard, _notify_admins_of_order
+
+    await _safe_edit_message(
+        callback.message,
+        "\n".join(
+            [
+                "<b>Cart order created!</b>",
+                f"Order ID: <code>{order.public_id}</code>",
+                f"Total: {total_amount} {currency}",
+                "",
+                summary_text,
+            ]
+        ),
+        reply_markup=_order_confirmation_keyboard(crypto_result),
+    )
+
+    await _notify_admins_of_order(
+        callback,
+        order,
+        "Cart order",
+        admin_answers,
+        crypto_result,
+    )
+
+    await callback.answer("Order created")
+    await state.clear()
+
+
+@router.callback_query(OrderFlowState.cart_confirm, F.data == CART_CANCEL_CHECKOUT)
+async def handle_cart_cancel(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    await state.clear()
+    await _render_cart(callback, session, notice="Checkout cancelled.")
+    await callback.answer()
 
 
 def _current_quantity(cart, product_id: int) -> int:
@@ -152,7 +275,7 @@ async def _render_cart(callback: CallbackQuery, session: AsyncSession, notice: O
     else:
         for idx, item in enumerate(cart.items, start=1):
             title = item.title_override or getattr(item.product, "name", "Item")
-            text_lines.append(f"{idx}. {title} x{item.quantity} — {item.total_amount} {item.currency}")
+            text_lines.append(f"{idx}. {title} x{item.quantity} - {item.total_amount} {item.currency}")
         text_lines.append("")
         text_lines.append(f"Subtotal: {totals.subtotal} {cart.currency}")
         if totals.discount > Decimal("0"):
@@ -168,6 +291,45 @@ async def _render_cart(callback: CallbackQuery, session: AsyncSession, notice: O
         "\n".join(text_lines),
         reply_markup=cart_menu_keyboard(cart, totals.total),
     )
+
+
+def _format_cart_summary(
+    items: list[dict[str, str | int]],
+    totals: dict[str, str],
+    currency: str,
+    *,
+    include_header: bool = False,
+) -> str:
+    lines = []
+    if include_header:
+        lines.append("<b>Items</b>")
+    for idx, item in enumerate(items, start=1):
+        lines.append(
+            f"{idx}. {item['name']} x{item['quantity']} - {item['total_amount']} {item['currency']}"
+        )
+    lines.append("")
+    lines.append(f"Subtotal: {totals.get('subtotal', '0')} {currency}")
+    if Decimal(totals.get("discount", "0")) > 0:
+        lines.append(f"Discounts: -{totals.get('discount')} {currency}")
+    if Decimal(totals.get("tax", "0")) > 0:
+        lines.append(f"Tax: {totals.get('tax')} {currency}")
+    if Decimal(totals.get("shipping", "0")) > 0:
+        lines.append(f"Shipping: {totals.get('shipping')} {currency}")
+    lines.append(f"Total: {totals.get('total', '0')} {currency}")
+    return "\n".join(lines)
+
+
+def _extract_cart_email(cart_answers: list[dict]) -> Optional[str]:
+    for entry in cart_answers or []:
+        email = None
+        for answer in entry.get("answers", []):
+            value = answer.get("value")
+            if value and "@" in value:
+                email = value
+                break
+        if email:
+            return email
+    return None
 
 
 def _default_currency() -> str:
@@ -207,7 +369,15 @@ async def _start_product_flow(
     product_id: int,
     *,
     origin: str,
+    item_index: Optional[int] = None,
 ) -> None:
     from app.bot.handlers.products import initiate_product_order_flow
 
-    await initiate_product_order_flow(callback, session, state, product_id, origin=origin)
+    await initiate_product_order_flow(
+        callback,
+        session,
+        state,
+        product_id,
+        origin=origin,
+        item_index=item_index,
+    )

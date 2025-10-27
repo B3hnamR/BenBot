@@ -13,6 +13,8 @@ CART_CHECKOUT_CALLBACK = "cart:checkout"
 CART_BACK_CALLBACK = "cart:back"
 CART_REMOVE_PREFIX = "cart:remove:"
 CART_QTY_PREFIX = "cart:qty:"
+CART_CONFIRM_ORDER = "cart:confirm_order"
+CART_CANCEL_CHECKOUT = "cart:cancel_checkout"
 
 
 def cart_menu_keyboard(cart: ShoppingCart, totals: Decimal) -> InlineKeyboardMarkup:
@@ -43,3 +45,11 @@ def cart_menu_keyboard(cart: ShoppingCart, totals: Decimal) -> InlineKeyboardMar
 def _item_label(item: CartItem) -> str:
     title = item.title_override or getattr(item.product, "name", "Item")
     return f"{title} x{item.quantity} - {item.total_amount} {item.currency}"
+
+
+def cart_checkout_confirmation_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Confirm order", callback_data=CART_CONFIRM_ORDER)
+    builder.button(text="Cancel checkout", callback_data=CART_CANCEL_CHECKOUT)
+    builder.adjust(1)
+    return builder.as_markup()

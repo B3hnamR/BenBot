@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import re
@@ -28,6 +28,7 @@ from app.bot.keyboards.products import (
     product_details_keyboard,
     products_list_keyboard,
 )
+from app.bot.keyboards.cart import cart_checkout_confirmation_keyboard
 from app.bot.states.order import OrderFlowState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus, ProductQuestionType
@@ -53,6 +54,7 @@ async def initiate_product_order_flow(
     product_id: int,
     *,
     origin: str,
+    item_index: int | None = None,
 ) -> bool:
     product_service = ProductService(session)
     product = await product_service.get_product(product_id)
@@ -79,8 +81,10 @@ async def initiate_product_order_flow(
 
     state_data = await state.get_data()
     cart_queue = state_data.get("cart_checkout_queue") if origin != "direct" else None
-    cart_index = state_data.get("cart_checkout_index", 0) if cart_queue else 0
-    cart_id = state_data.get("cart_id") if cart_queue else None
+    cart_index = item_index if item_index is not None else state_data.get("cart_checkout_index", 0)
+    cart_answers = state_data.get("cart_answers", []) if origin != "direct" else None
+    cart_totals = state_data.get("cart_totals") if origin != "direct" else None
+    cart_currency = state_data.get("cart_currency") if origin != "direct" else None
 
     await state.set_state(OrderFlowState.collecting_answer)
     await state.update_data(
@@ -92,9 +96,10 @@ async def initiate_product_order_flow(
         question_index=0,
         answers=[],
         origin=origin,
-        cart_checkout_queue=cart_queue,
         cart_checkout_index=cart_index,
-        cart_id=cart_id,
+        cart_answers=cart_answers or [],
+        cart_totals=cart_totals,
+        cart_currency=cart_currency,
     )
 
     if questions:
@@ -193,8 +198,13 @@ async def handle_add_to_cart(
     await cart_service.refresh_totals(cart)
 
     await callback.answer("Added to cart")
+    builder = InlineKeyboardBuilder()
+    builder.button(text="View cart", callback_data=MainMenuCallback.CART.value)
+    builder.button(text="Continue shopping", callback_data=MainMenuCallback.PRODUCTS.value)
+    builder.adjust(1)
     await callback.message.answer(
         f"? <b>{product.name}</b> added to cart.\nTotal items: {len(cart.items)}",
+        reply_markup=builder.as_markup(),
     )
 
 
@@ -278,9 +288,8 @@ async def finalize_order(
     product_name: str = data.get("product_name", "Product")
     answers: List[dict[str, str | None]] = list(data.get("answers", []))
     origin: str = data.get("origin", "direct")
-    cart_queue: list[int] | None = data.get("cart_checkout_queue")
+    cart_queue: list[dict] | None = data.get("cart_checkout_queue")
     cart_index: int = int(data.get("cart_checkout_index", 0))
-    cart_id = data.get("cart_id")
 
     order_service = OrderService(session)
     product = await order_service.get_product(product_id)
@@ -302,6 +311,38 @@ async def finalize_order(
 
     answer_pairs = [(item["key"], item.get("value")) for item in answers]
 
+    if origin != "direct" and cart_queue:
+        cart_answers = list(data.get("cart_answers", []))
+        cart_answers.append({"product_id": product_id, "answers": answers})
+        await state.update_data(cart_answers=cart_answers)
+
+        next_index = cart_index + 1
+        if next_index < len(cart_queue):
+            next_item = cart_queue[next_index]
+            await state.update_data(cart_checkout_index=next_index)
+            await initiate_product_order_flow(
+                callback,
+                session,
+                state,
+                next_item["product_id"],
+                origin="cart",
+                item_index=next_index,
+            )
+            await callback.answer("Saved responses. Next item...")
+            return
+
+        totals = data.get("cart_totals") or {}
+        currency = data.get("cart_currency") or product.currency
+        summary_text = _format_cart_summary_for_confirmation(cart_queue, totals, currency)
+        await state.set_state(OrderFlowState.cart_confirm)
+        await _safe_edit_message(
+            callback.message,
+            summary_text,
+            reply_markup=cart_checkout_confirmation_keyboard(),
+        )
+        await callback.answer("Review your cart and confirm.")
+        return
+
     try:
         order = await order_service.create_order(
             user_id=profile.id,
@@ -321,33 +362,7 @@ async def finalize_order(
         email=_extract_email_from_answers(answers),
     )
 
-    # If this order originates from a cart checkout, update cart state.
-    cart_service: CartService | None = None
-    cart = None
-    if origin != "direct" and cart_queue:
-        cart_service = CartService(session)
-        cart = await cart_service.get_active_cart(profile.id)
-        if cart is not None:
-            product_obj = await cart_service.fetch_product(product_id)
-            if product_obj is not None:
-                current_qty = _cart_quantity(cart, product_id)
-                new_qty = max(0, current_qty - 1)
-                await cart_service.update_quantity(cart, product_obj, new_qty)
-
-        next_index = cart_index + 1
-        if next_index < len(cart_queue):
-            await state.update_data(
-                cart_checkout_queue=cart_queue,
-                cart_checkout_index=next_index,
-                cart_id=cart_id,
-                origin="cart",
-            )
-        else:
-            if cart is not None:
-                await cart_service.clear_cart(cart)
-            await state.clear()
-    else:
-        await state.clear()
+    await state.clear()
 
     await _safe_edit_message(
         callback.message,
@@ -357,17 +372,6 @@ async def finalize_order(
     await callback.answer("Order created")
 
     await _notify_admins_of_order(callback, order, product_name, answers, crypto_result)
-
-    if origin != "direct" and cart_queue:
-        next_index = cart_index + 1
-        if next_index < len(cart_queue):
-            next_product_id = cart_queue[next_index]
-            await initiate_product_order_flow(callback, session, state, next_product_id, origin="cart")
-            return
-        else:
-            await callback.message.answer("Cart checkout complete. All items processed.")
-            return
-
 
 @router.callback_query(OrderFlowState.confirm, F.data == ORDER_CANCEL_CALLBACK)
 async def cancel_order_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
@@ -586,6 +590,28 @@ def _order_confirmation_keyboard(crypto: CryptoInvoiceResult | None):
     return builder.as_markup()
 
 
+def _format_cart_summary_for_confirmation(items: list[dict], totals: dict[str, str], currency: str) -> str:
+    lines: list[str] = ["<b>Cart checkout summary</b>", ""]
+    for idx, item in enumerate(items, start=1):
+        lines.append(f"{idx}. {item['name']} x{item['quantity']} - {item['total_amount']} {item['currency']}")
+    lines.append("")
+    subtotal = totals.get("subtotal", "0")
+    discount = totals.get("discount", "0")
+    tax = totals.get("tax", "0")
+    shipping = totals.get("shipping", "0")
+    total = totals.get("total", "0")
+    lines.append(f"Subtotal: {subtotal} {currency}")
+    if Decimal(discount or "0") > 0:
+        lines.append(f"Discounts: -{discount} {currency}")
+    if Decimal(tax or "0") > 0:
+        lines.append(f"Tax: {tax} {currency}")
+    if Decimal(shipping or "0") > 0:
+        lines.append(f"Shipping: {shipping} {currency}")
+    lines.append(f"Total: {total} {currency}")
+    lines.append("")
+    lines.append("Confirm to create a combined order for all items.")
+    return "\n".join(lines)
+
 def _extract_email_from_answers(answers: list[dict[str, str | None]]) -> str | None:
     for item in answers:
         value = (item.get("value") or "").strip()
@@ -601,11 +627,6 @@ def _extract_email_from_answers(answers: list[dict[str, str | None]]) -> str | N
     return None
 
 
-def _cart_quantity(cart, product_id: int) -> int:
-    for item in cart.items:
-        if item.product_id == product_id:
-            return item.quantity
-    return 0
 
 async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:
     if message is None:
