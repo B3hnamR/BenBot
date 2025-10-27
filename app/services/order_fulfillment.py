@@ -13,6 +13,7 @@ from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 from app.services.fulfillment_service import FulfillmentService
 from app.services.order_notification_service import OrderNotificationService
+from app.services.order_summary import build_order_summary
 
 
 log = get_logger(__name__)
@@ -106,12 +107,25 @@ def _build_user_message(
     inventory_update: InventoryUpdate | None,
     action_result: dict[str, Any] | None,
 ) -> str:
-    product_name = getattr(order.product, "name", "your purchase")
+    summary = build_order_summary(order)
+    if summary.has_cart_items:
+        headline = f"Order <code>{order.public_id}</code> is confirmed."
+    else:
+        headline = f"Order <code>{order.public_id}</code> for {summary.label} is confirmed."
+
     lines = [
         "<b>Payment received!</b>",
-        f"Order <code>{order.public_id}</code> for {product_name} is confirmed.",
+        headline,
         "We'll process fulfillment shortly and keep you posted.",
     ]
+    if summary.has_cart_items and summary.item_lines:
+        lines.append("")
+        lines.append("<b>Items</b>")
+        lines.extend(summary.item_lines)
+    if summary.has_cart_items and summary.totals_lines:
+        lines.append("")
+        lines.extend(summary.totals_lines)
+
     if inventory_update and inventory_update.after is not None:
         if inventory_update.after > 0:
             lines.append(f"Remaining stock for this item: {inventory_update.after}.")

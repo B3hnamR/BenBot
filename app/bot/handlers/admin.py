@@ -36,6 +36,7 @@ from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXT
 from app.services.order_fulfillment import ensure_fulfillment
 from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
+from app.services.order_summary import build_order_summary
 
 router = Router(name="admin")
 
@@ -1026,11 +1027,24 @@ def _format_admin_order_detail(order: Order) -> str:
 
 
 def _format_delivery_notice(order: Order, *, meta: dict[str, Any]) -> str:
-    product_name = getattr(order.product, "name", "your purchase")
+    summary = build_order_summary(order)
+    if summary.has_cart_items:
+        headline = f"Order <code>{order.public_id}</code> has been delivered."
+    else:
+        headline = f"Order <code>{order.public_id}</code> for {summary.label} has been delivered."
+
     lines = [
         "<b>Delivery update</b>",
-        f"Order <code>{order.public_id}</code> for {product_name} has been delivered.",
+        headline,
     ]
+    if summary.has_cart_items and summary.item_lines:
+        lines.append("")
+        lines.append("<b>Items</b>")
+        lines.extend(summary.item_lines)
+    if summary.has_cart_items and summary.totals_lines:
+        lines.append("")
+        lines.extend(summary.totals_lines)
+
     fulfillment = meta.get("fulfillment") if isinstance(meta, dict) else None
     context = (fulfillment or {}).get("context") or {}
     license_code = context.get("license_code")

@@ -11,6 +11,7 @@ from app.core.logging import get_logger
 from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories import OrderRepository
 from app.services.config_service import ConfigService
+from app.services.order_summary import build_order_summary
 
 NOTIFICATION_META_KEY = "notifications"
 
@@ -38,14 +39,22 @@ class OrderNotificationService:
         if meta.get("payment_sent"):
             return False
 
+        summary = build_order_summary(order)
         message_lines = [
             "<b>Order paid</b>",
             f"Order: <code>{order.public_id}</code>",
-            f"Product: {getattr(order.product, 'name', 'product')}",
+            f"{'Items' if summary.has_cart_items else 'Product'}: {summary.label}",
             f"Amount: {order.total_amount} {order.currency}",
             f"User ID: {order.user_id}",
             f"Source: {source}",
         ]
+        if summary.has_cart_items and summary.item_lines:
+            message_lines.append("")
+            message_lines.append("<b>Items</b>")
+            message_lines.extend(summary.item_lines)
+        if summary.has_cart_items and summary.totals_lines:
+            message_lines.append("")
+            message_lines.extend(summary.totals_lines)
         appended = list(extra_lines or [])
         if appended:
             message_lines.append("")
