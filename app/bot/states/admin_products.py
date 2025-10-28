@@ -24,3 +24,29 @@ class ProductQuestionCreateState(StatesGroup):
     required = State()
     options = State()
     confirm = State()
+
+
+class CategoryCreateState(StatesGroup):
+    name = State()
+    description = State()
+    position = State()
+    confirm = State()
+
+
+class CategoryEditState(StatesGroup):
+    awaiting_value = State()
+
+
+class CategoryAssignState(StatesGroup):
+    awaiting_product_id = State()
+
+
+class BundleComponentState(StatesGroup):
+    awaiting_product_id = State()
+    awaiting_quantity = State()
+
+
+class RelationCreateState(StatesGroup):
+    awaiting_product_id = State()
+    awaiting_type = State()
+    awaiting_weight = State()

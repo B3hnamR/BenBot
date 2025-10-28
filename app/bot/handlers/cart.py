@@ -93,13 +93,17 @@ async def handle_cart_quantity(callback: CallbackQuery, session: AsyncSession) -
     if product is None:
         await callback.answer("Product not found.", show_alert=True)
         return
-    if action == "inc":
-        await cart_service.add_product(cart, product, quantity=1)
-    elif action == "dec":
-        current_qty = _current_quantity(cart, product_id)
-        await cart_service.update_quantity(cart, product, max(0, current_qty - 1))
-    else:
-        await callback.answer()
+    try:
+        if action == "inc":
+            await cart_service.add_product(cart, product, quantity=1)
+        elif action == "dec":
+            current_qty = _current_quantity(cart, product_id)
+            await cart_service.update_quantity(cart, product, max(0, current_qty - 1))
+        else:
+            await callback.answer()
+            return
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
         return
     await _render_cart(callback, session)
     await callback.answer()

@@ -194,7 +194,11 @@ async def handle_add_to_cart(
 
     cart_service = CartService(session)
     cart = await cart_service.get_or_create_cart(user_id=profile.id, currency=product.currency)
-    await cart_service.add_product(cart, product, quantity=1)
+    try:
+        await cart_service.add_product(cart, product, quantity=1)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     await cart_service.refresh_totals(cart)
 
     await callback.answer("Added to cart")
@@ -203,7 +207,7 @@ async def handle_add_to_cart(
     builder.button(text="Continue shopping", callback_data=MainMenuCallback.PRODUCTS.value)
     builder.adjust(1)
     await callback.message.answer(
-        f"? <b>{product.name}</b> added to cart.\nTotal items: {len(cart.items)}",
+        f"Cart update: <b>{product.name}</b> added.\nTotal items: {len(cart.items)}",
         reply_markup=builder.as_markup(),
     )
 

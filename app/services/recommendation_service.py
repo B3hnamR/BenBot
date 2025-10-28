@@ -43,4 +43,21 @@ class RecommendationService:
             return products[:limit]
 
         # Optional TODO: implement heuristics (e.g., top sellers). For now we return what we have.
-        return products
+        source_product = await self._products.get_by_id(product_id)
+        if source_product is not None:
+            for link in source_product.category_links or []:
+                category = link.category
+                if category is None:
+                    continue
+                for peer_link in category.product_links or []:
+                    candidate = peer_link.product
+                    if candidate is None or not candidate.is_active:
+                        continue
+                    if candidate.id == product_id or candidate.id in seen:
+                        continue
+                    products.append(candidate)
+                    seen.add(candidate.id)
+                    if len(products) >= limit:
+                        return products[:limit]
+
+        return products[:limit]

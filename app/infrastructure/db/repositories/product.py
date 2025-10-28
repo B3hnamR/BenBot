@@ -3,45 +3,73 @@
 from typing import Sequence
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
-from app.infrastructure.db.models import Product
+from app.infrastructure.db.models import Product, ProductBundleItem, ProductCategory, ProductRelation
 
 from .base import BaseRepository
 
 
 class ProductRepository(BaseRepository):
     async def list_active(self) -> list[Product]:
-        result = await self.session.execute(
+        stmt = (
             select(Product)
-            .options(joinedload(Product.questions))
+            .options(
+                selectinload(Product.questions),
+                selectinload(Product.categories),
+                selectinload(Product.category_links).joinedload(ProductCategory.category),
+                selectinload(Product.bundle_components).joinedload(ProductBundleItem.component),
+                selectinload(Product.related_products).joinedload(ProductRelation.related_product),
+            )
             .where(Product.is_active.is_(True))
             .order_by(Product.position.asc(), Product.created_at.desc())
         )
+        result = await self.session.execute(stmt)
         return list(result.scalars().unique())
 
     async def list_all(self) -> Sequence[Product]:
-        result = await self.session.execute(
+        stmt = (
             select(Product)
-            .options(joinedload(Product.questions))
+            .options(
+                selectinload(Product.questions),
+                selectinload(Product.categories),
+                selectinload(Product.category_links).joinedload(ProductCategory.category),
+                selectinload(Product.bundle_components).joinedload(ProductBundleItem.component),
+                selectinload(Product.related_products).joinedload(ProductRelation.related_product),
+            )
             .order_by(Product.position.asc(), Product.created_at.desc())
         )
+        result = await self.session.execute(stmt)
         return result.scalars().unique().all()
 
     async def get_by_slug(self, slug: str) -> Product | None:
-        result = await self.session.execute(
+        stmt = (
             select(Product)
-            .options(joinedload(Product.questions))
+            .options(
+                selectinload(Product.questions),
+                selectinload(Product.categories),
+                selectinload(Product.category_links).joinedload(ProductCategory.category),
+                selectinload(Product.bundle_components).joinedload(ProductBundleItem.component),
+                selectinload(Product.related_products).joinedload(ProductRelation.related_product),
+            )
             .where(Product.slug == slug)
         )
+        result = await self.session.execute(stmt)
         return result.unique().scalar_one_or_none()
 
     async def get_by_id(self, product_id: int) -> Product | None:
-        result = await self.session.execute(
+        stmt = (
             select(Product)
-            .options(joinedload(Product.questions))
+            .options(
+                selectinload(Product.questions),
+                selectinload(Product.categories),
+                selectinload(Product.category_links).joinedload(ProductCategory.category),
+                selectinload(Product.bundle_components).joinedload(ProductBundleItem.component),
+                selectinload(Product.related_products).joinedload(ProductRelation.related_product),
+            )
             .where(Product.id == product_id)
         )
+        result = await self.session.execute(stmt)
         return result.unique().scalar_one_or_none()
 
     async def slug_exists(self, slug: str) -> bool:

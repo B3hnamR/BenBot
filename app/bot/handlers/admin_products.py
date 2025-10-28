@@ -16,6 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.callbacks.admin_products import ProductAdminCallback
 from app.bot.keyboards.admin import AdminMenuCallback, admin_menu_keyboard
 from app.bot.keyboards.admin_products import (
+    bundle_components_keyboard,
+    categories_overview_keyboard,
+    category_detail_keyboard,
+    category_edit_fields_keyboard,
+    category_creation_confirm_keyboard,
+    category_delete_confirm_keyboard,
     creation_confirm_keyboard,
     product_delete_confirm_keyboard,
     product_detail_keyboard,
@@ -26,16 +32,27 @@ from app.bot.keyboards.admin_products import (
     question_delete_confirm_keyboard,
     question_required_keyboard,
     question_type_keyboard,
+    relations_keyboard,
 )
 from app.bot.states.admin_products import (
+    BundleComponentState,
+    CategoryAssignState,
+    CategoryCreateState,
+    CategoryEditState,
     ProductCreateState,
     ProductEditState,
     ProductQuestionCreateState,
+    RelationCreateState,
 )
 from app.core.config import get_settings
-from app.core.enums import ProductQuestionType
+from app.core.enums import ProductQuestionType, ProductRelationType
+from app.infrastructure.db.models import ProductRelation
 from app.services.config_service import ConfigService
 from app.services.product_admin_service import (
+    BundleConfigurationError,
+    CategoryInput,
+    CategoryNotFoundError,
+    CategoryValidationError,
     ProductAdminService,
     ProductInput,
     ProductNotFoundError,
@@ -65,6 +82,8 @@ def _format_product_details(product) -> str:
     summary = html.escape(product.summary) if product.summary else "-"
     description = html.escape(product.description) if product.description else "-"
     inventory = "Unlimited" if product.inventory is None else str(product.inventory)
+    max_per_order = "-" if product.max_per_order is None else str(product.max_per_order)
+    threshold = "-" if product.inventory_threshold is None else str(product.inventory_threshold)
     status = "Active" if product.is_active else "Inactive"
     question_count = len(product.questions or [])
     delivery_note = "-"
@@ -82,14 +101,26 @@ def _format_product_details(product) -> str:
                     actions.append(str(step.get("action", "?")))
             plan_summary = ", ".join(actions) if actions else "-"
 
+    category_names = ", ".join(html.escape(cat.name) for cat in (product.categories or []) if cat) or "-"
+    bundle_lines: list[str] = []
+    for idx, item in enumerate(product.bundle_components or [], start=1):
+        component = item.component
+        name = html.escape(component.name) if component else f"Product #{item.component_product_id}"
+        bundle_lines.append(f"{idx}. {name} x{item.quantity}")
+    bundle_summary = "\n".join(bundle_lines) if bundle_lines else "-"
+
     return (
         f"<b>{html.escape(product.name)}</b>\n"
         f"Status: {status}\n"
         f"Price: {format_price(product.price)} {product.currency}\n"
         f"Inventory: {inventory}\n"
+        f"Max per order: {max_per_order}\n"
+        f"Low-stock threshold: {threshold}\n"
         f"Position: {product.position}\n\n"
         f"<b>Summary</b>\n{summary}\n\n"
         f"<b>Description</b>\n{description}\n\n"
+        f"<b>Categories</b>\n{category_names}\n\n"
+        f"<b>Bundle components</b>\n{bundle_summary}\n\n"
         f"<b>Delivery message</b>\n{delivery_note}\n\n"
         f"<b>Fulfillment plan</b>\n{plan_summary}\n\n"
         f"Questions configured: {question_count}"
@@ -115,6 +146,82 @@ def _format_questions_text(questions: Iterable) -> str:
             lines.append(f"   Options: {options}")
         if question.help_text:
             lines.append(f"   Help: {html.escape(question.help_text)}")
+    return "\n".join(lines)
+
+
+def _format_categories_text(categories: Sequence) -> str:
+    categories = list(categories)
+    if not categories:
+        return "No categories defined yet. Use the button below to add one."
+
+    lines: list[str] = ["<b>Categories</b>"]
+    for index, category in enumerate(categories, start=1):
+        status = "ACTIVE" if category.is_active else "INACTIVE"
+        product_count = len(category.product_links or [])
+        lines.append(
+            f"{index}. {html.escape(category.name)} - {status}\n"
+            f"   Slug: <code>{html.escape(category.slug)}</code>\n"
+            f"   Products linked: {product_count}"
+        )
+    return "\n".join(lines)
+
+
+def _format_category_detail(category) -> str:
+    status = "Active" if category.is_active else "Inactive"
+    description = html.escape(category.description) if category.description else "-"
+    lines = [
+        f"<b>{html.escape(category.name)}</b>",
+        f"Slug: <code>{html.escape(category.slug)}</code>",
+        f"Status: {status}",
+        f"Position: {category.position}",
+        "",
+        f"<b>Description</b>",
+        description,
+        "",
+    ]
+    links = list(category.product_links or [])
+    if links:
+        lines.append("<b>Products</b>")
+        for index, link in enumerate(links, start=1):
+            product = link.product
+            name = html.escape(product.name) if product else f"Product #{link.product_id}"
+            lines.append(f"{index}. {name}")
+    else:
+        lines.append("No products assigned yet.")
+    return "\n".join(lines)
+
+
+def _format_bundle_components_text(product, components: Iterable) -> str:
+    components = list(components)
+    lines = [f"<b>{html.escape(product.name)}</b> - bundle components", ""]
+    if not components:
+        lines.append("No components attached. Use the button below to add one.")
+        return "\n".join(lines)
+
+    for index, item in enumerate(components, start=1):
+        component = item.component
+        name = html.escape(component.name) if component else f"Product #{item.component_product_id}"
+        inventory = "∞" if component is None or component.inventory is None else str(component.inventory)
+        lines.append(
+            f"{index}. {name} x{item.quantity}\n"
+            f"   Inventory: {inventory}"
+        )
+    return "\n".join(lines)
+
+
+def _format_relations_text(product, relations: Iterable[ProductRelation]) -> str:
+    relations = list(relations)
+    lines = [f"<b>{html.escape(product.name)}</b> - related products", ""]
+    if not relations:
+        lines.append("No related products configured yet.")
+        return "\n".join(lines)
+
+    for index, relation in enumerate(relations, start=1):
+        related = relation.related_product
+        name = html.escape(related.name) if related else f"Product #{relation.related_product_id}"
+        lines.append(
+            f"{index}. {relation.relation_type.value.title()} -> {name} (weight={relation.weight})"
+        )
     return "\n".join(lines)
 
 
@@ -174,6 +281,8 @@ def _field_prompt(field: str) -> str:
         "price": "Enter new price (decimal number).",
         "currency": "Enter currency code (3 letters).",
         "inventory": "Enter inventory quantity (integer). Send /skip for unlimited.",
+        "max_per_order": "Enter the maximum units a customer can buy per order. Send /skip to remove the limit.",
+        "inventory_threshold": "Enter low-stock threshold (integer). Send /skip to remove the threshold.",
         "position": "Enter display position (positive integer).",
         "delivery_note": "Enter the post-payment delivery message. Send /skip to clear it.",
         "fulfillment_plan": (
@@ -196,6 +305,18 @@ def _field_prompt(field: str) -> str:
 async def _cancel_state(message: Message, state: FSMContext, notice: str) -> None:
     await state.clear()
     await message.answer(notice)
+
+
+def _category_field_prompt(field: str) -> str:
+    prompts = {
+        "name": "Enter new category name. Send /cancel to abort.",
+        "description": "Enter category description. Send /skip to clear it.",
+        "position": "Enter display position (positive integer).",
+    }
+    try:
+        return prompts[field]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported category field '{field}'") from exc
 
 
 def _parse_edit_value(field: str, value: str) -> tuple[object | None, bool]:
@@ -221,6 +342,16 @@ def _parse_edit_value(field: str, value: str) -> tuple[object | None, bool]:
         return candidate, False
 
     if field == "inventory":
+        if not normalized or _is_skip_message_value(normalized):
+            return None, True
+        return _parse_integer(normalized, allow_zero=True), False
+
+    if field == "max_per_order":
+        if not normalized or _is_skip_message_value(normalized):
+            return None, True
+        return _parse_integer(normalized, allow_zero=False), False
+
+    if field == "inventory_threshold":
         if not normalized or _is_skip_message_value(normalized):
             return None, True
         return _parse_integer(normalized, allow_zero=True), False
@@ -331,6 +462,79 @@ async def render_questions_overview(
         await _safe_edit_message(message, payload, reply_markup=markup)
 
 
+async def render_categories_overview(
+    message: Message,
+    session: AsyncSession,
+    *,
+    as_new_message: bool = False,
+) -> None:
+    service = ProductAdminService(session)
+    categories = await service.list_categories()
+    text = _format_categories_text(categories)
+    markup = categories_overview_keyboard(categories)
+
+    if as_new_message:
+        await message.answer(text, reply_markup=markup)
+    else:
+        await _safe_edit_message(message, text, reply_markup=markup)
+
+
+async def render_category_detail(
+    message: Message,
+    session: AsyncSession,
+    category_id: int,
+    *,
+    as_new_message: bool = False,
+) -> None:
+    service = ProductAdminService(session)
+    category = await service.get_category(category_id)
+    text = _format_category_detail(category)
+    markup = category_detail_keyboard(category)
+
+    if as_new_message:
+        await message.answer(text, reply_markup=markup)
+    else:
+        await _safe_edit_message(message, text, reply_markup=markup)
+
+
+async def render_bundle_components(
+    message: Message,
+    session: AsyncSession,
+    product_id: int,
+    *,
+    as_new_message: bool = False,
+) -> None:
+    service = ProductAdminService(session)
+    product = await service.get_product(product_id)
+    components = await service.list_bundle_items(product_id)
+    text = _format_bundle_components_text(product, components)
+    markup = bundle_components_keyboard(product_id, components)
+
+    if as_new_message:
+        await message.answer(text, reply_markup=markup)
+    else:
+        await _safe_edit_message(message, text, reply_markup=markup)
+
+
+async def render_relations_overview(
+    message: Message,
+    session: AsyncSession,
+    product_id: int,
+    *,
+    as_new_message: bool = False,
+) -> None:
+    service = ProductAdminService(session)
+    product = await service.get_product(product_id)
+    relations = await service.list_relations(product_id)
+    text = _format_relations_text(product, relations)
+    markup = relations_keyboard(product_id, relations)
+
+    if as_new_message:
+        await message.answer(text, reply_markup=markup)
+    else:
+        await _safe_edit_message(message, text, reply_markup=markup)
+
+
 async def _return_to_admin_menu(message: Message, session: AsyncSession) -> None:
     config_service = ConfigService(session)
     enabled = await config_service.subscription_required()
@@ -360,6 +564,41 @@ async def back_to_admin(callback: CallbackQuery, session: AsyncSession) -> None:
 @router.callback_query(ProductAdminCallback.filter(F.action == "back_to_list"))
 async def back_to_list(callback: CallbackQuery, session: AsyncSession) -> None:
     await render_products_overview(callback.message, session, as_new_message=False)
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "categories"))
+async def handle_categories_overview(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    await render_categories_overview(callback.message, session, as_new_message=False)
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_view"))
+async def handle_category_view(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    if callback_data.target_id is None:
+        await callback.answer("Category not found.", show_alert=True)
+        return
+    await render_category_detail(callback.message, session, callback_data.target_id, as_new_message=False)
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_add"))
+async def start_category_create(callback: CallbackQuery, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        await callback.answer("Finish the current operation first.", show_alert=True)
+        return
+    await state.set_state(CategoryCreateState.name)
+    await callback.message.answer(
+        "Enter category name.\nSend /cancel to abort creation.",
+    )
     await callback.answer()
 # ---------------------------------------------------------------------------
 # Product creation wizard
@@ -534,6 +773,311 @@ async def confirm_product_creation(
     await _safe_edit_message(callback.message, "Product created successfully.")
     await render_product_details(callback.message, session, product.id, as_new_message=True)
     await callback.answer("Product saved")
+
+
+@router.message(CategoryCreateState.name)
+async def collect_category_name(message: Message, state: FSMContext) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Category creation cancelled.")
+        return
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("Name cannot be empty. Please enter category name.")
+        return
+    await state.update_data(category_name=name)
+    await state.set_state(CategoryCreateState.description)
+    await message.answer("Enter category description (optional). Send /skip to leave empty.")
+
+
+@router.message(CategoryCreateState.description)
+async def collect_category_description(message: Message, state: FSMContext) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Category creation cancelled.")
+        return
+    if _is_skip_message(message):
+        await state.update_data(category_description=None)
+    else:
+        await state.update_data(category_description=(message.text or "").strip())
+    await state.set_state(CategoryCreateState.position)
+    await message.answer("Enter display position (positive integer). Send /skip to auto-place.")
+
+
+@router.message(CategoryCreateState.position)
+async def collect_category_position(message: Message, state: FSMContext) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Category creation cancelled.")
+        return
+    if _is_skip_message(message):
+        position_value: int | None = None
+    else:
+        try:
+            position_value = _parse_integer(message.text or "", allow_zero=False)
+        except ProductValidationError as exc:
+            await message.answer(str(exc))
+            return
+    await state.update_data(category_position=position_value)
+    await state.set_state(CategoryCreateState.confirm)
+    data = await state.get_data()
+    summary_lines = [
+        "<b>Review category details</b>",
+        "",
+        f"Name: {html.escape(data.get('category_name') or '-')}",
+        f"Description: {html.escape(data.get('category_description') or '-')}",
+        f"Position: {data.get('category_position') or 'auto'}",
+        "",
+        "Save this category?",
+    ]
+    await message.answer("\n".join(summary_lines), reply_markup=category_creation_confirm_keyboard())
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_create_cancel"))
+async def cancel_category_creation(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    if await state.get_state() != CategoryCreateState.confirm.state:
+        await callback.answer()
+        return
+    await state.clear()
+    await render_categories_overview(callback.message, session, as_new_message=False)
+    await callback.answer("Creation cancelled")
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_create_confirm"))
+async def confirm_category_creation(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    if await state.get_state() != CategoryCreateState.confirm.state:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    service = ProductAdminService(session)
+    try:
+        category = await service.create_category(
+            CategoryInput(
+                name=data.get("category_name"),
+                description=data.get("category_description"),
+                position=data.get("category_position"),
+            )
+        )
+    except CategoryValidationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.clear()
+    await render_category_detail(callback.message, session, category.id, as_new_message=False)
+    await callback.answer("Category created.")
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_toggle"))
+async def toggle_category_status(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    category_id = callback_data.target_id
+    if category_id is None:
+        await callback.answer()
+        return
+    service = ProductAdminService(session)
+    try:
+        category = await service.toggle_category_active(category_id)
+    except CategoryNotFoundError:
+        await callback.answer("Category not found", show_alert=True)
+        await render_categories_overview(callback.message, session, as_new_message=False)
+        return
+    status = "enabled" if category.is_active else "disabled"
+    await render_category_detail(callback.message, session, category.id, as_new_message=False)
+    await callback.answer(f"Category {status}.")
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_edit_menu"))
+async def open_category_edit_menu(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+) -> None:
+    category_id = callback_data.target_id
+    if category_id is None:
+        await callback.answer()
+        return
+    await _safe_edit_message(
+        callback.message,
+        "Select the field you want to update.",
+        reply_markup=category_edit_fields_keyboard(category_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_edit_field"))
+async def select_category_field(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    state: FSMContext,
+) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        await callback.answer("Finish the current operation first.", show_alert=True)
+        return
+    category_id = callback_data.target_id
+    field = callback_data.value
+    if category_id is None or not field:
+        await callback.answer()
+        return
+    await state.set_state(CategoryEditState.awaiting_value)
+    await state.update_data(category_id=category_id, category_field=field)
+    await callback.message.answer(_category_field_prompt(field))
+    await callback.answer()
+
+
+@router.message(CategoryEditState.awaiting_value)
+async def apply_category_edit(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Category edit cancelled.")
+        return
+
+    data = await state.get_data()
+    category_id = data.get("category_id")
+    field = data.get("category_field")
+    raw_value = message.text or ""
+
+    update_payload: dict[str, object | None] = {}
+    try:
+        if field == "name":
+            normalized = raw_value.strip()
+            if not normalized:
+                raise CategoryValidationError("Name cannot be empty.")
+            update_payload[field] = normalized
+        elif field == "description":
+            if _is_skip_message(message):
+                update_payload[field] = None
+            else:
+                update_payload[field] = raw_value.strip()
+        elif field == "position":
+            update_payload[field] = _parse_integer(raw_value, allow_zero=False)
+        else:
+            raise CategoryValidationError("Unsupported field.")
+    except (CategoryValidationError, ProductValidationError) as exc:
+        await message.answer(str(exc))
+        return
+
+    service = ProductAdminService(session)
+    try:
+        category = await service.update_category(category_id, **update_payload)
+    except CategoryNotFoundError:
+        await message.answer("Category no longer exists.")
+        await state.clear()
+        return
+    await message.answer("Category updated.")
+    await state.clear()
+    await render_category_detail(message, session, category.id, as_new_message=True)
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_add_product"))
+async def start_category_product_assignment(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    state: FSMContext,
+) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        await callback.answer("Finish the current operation first.", show_alert=True)
+        return
+    category_id = callback_data.target_id
+    if category_id is None:
+        await callback.answer()
+        return
+    await state.set_state(CategoryAssignState.awaiting_product_id)
+    await state.update_data(category_id=category_id)
+    await callback.message.answer(
+        "Send the product ID you want to attach to this category.\nSend /cancel to abort."
+    )
+    await callback.answer()
+
+
+@router.message(CategoryAssignState.awaiting_product_id)
+async def assign_product_to_category(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Category assignment cancelled.")
+        return
+    try:
+        product_id = _parse_integer(message.text or "", allow_zero=False)
+    except ProductValidationError as exc:
+        await message.answer(str(exc))
+        return
+    data = await state.get_data()
+    category_id = data.get("category_id")
+    service = ProductAdminService(session)
+    try:
+        await service.attach_product_to_category(category_id=category_id, product_id=product_id)
+    except ProductNotFoundError:
+        await message.answer("Product not found.")
+        return
+    except CategoryNotFoundError:
+        await message.answer("Category no longer exists.")
+        await state.clear()
+        return
+    await state.clear()
+    await message.answer("Product assigned to category.")
+    await render_category_detail(message, session, category_id, as_new_message=True)
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_remove_product"))
+async def remove_product_from_category(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    category_id = callback_data.target_id
+    product_id = int(callback_data.value) if callback_data.value else None
+    if category_id is None or product_id is None:
+        await callback.answer()
+        return
+    service = ProductAdminService(session)
+    await service.detach_product_from_category(category_id=category_id, product_id=product_id)
+    await render_category_detail(callback.message, session, category_id, as_new_message=False)
+    await callback.answer("Product removed.")
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_delete"))
+async def prompt_category_delete(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+) -> None:
+    category_id = callback_data.target_id
+    if category_id is None:
+        await callback.answer()
+        return
+    await _safe_edit_message(
+        callback.message,
+        "Confirm deletion? This will remove the category association from all products.",
+        reply_markup=category_delete_confirm_keyboard(category_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "category_delete_confirm"))
+async def confirm_category_delete(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    category_id = callback_data.target_id
+    if category_id is None:
+        await callback.answer()
+        return
+    service = ProductAdminService(session)
+    try:
+        await service.delete_category(category_id)
+    except CategoryNotFoundError:
+        await callback.answer("Category not found", show_alert=True)
+        await render_categories_overview(callback.message, session, as_new_message=False)
+        return
+    await render_categories_overview(callback.message, session, as_new_message=False)
+    await callback.answer("Category deleted.")
+
+
 # ---------------------------------------------------------------------------
 # Product editing and status management
 # ---------------------------------------------------------------------------
@@ -605,6 +1149,253 @@ async def apply_field_edit(message: Message, state: FSMContext, session: AsyncSe
     await message.answer("Field updated.")
     await state.clear()
     await render_product_details(message, session, product.id, as_new_message=True)
+
+
+# ---------------------------------------------------------------------------
+# Bundle management
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "bundle"))
+async def handle_bundle_view(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    product_id = callback_data.product_id
+    if product_id is None:
+        await callback.answer()
+        return
+    await render_bundle_components(callback.message, session, product_id, as_new_message=False)
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "bundle_add"))
+async def start_bundle_add(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    state: FSMContext,
+) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        await callback.answer("Finish the current operation first.", show_alert=True)
+        return
+    product_id = callback_data.product_id
+    if product_id is None:
+        await callback.answer()
+        return
+    await state.set_state(BundleComponentState.awaiting_product_id)
+    await state.update_data(bundle_product_id=product_id)
+    await callback.message.answer(
+        "Send the product ID you want to add as a component.\nSend /cancel to abort."
+    )
+    await callback.answer()
+
+
+@router.message(BundleComponentState.awaiting_product_id)
+async def collect_bundle_component_id(message: Message, state: FSMContext) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Bundle editing cancelled.")
+        return
+    try:
+        component_id = _parse_integer(message.text or "", allow_zero=False)
+    except ProductValidationError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(bundle_component_id=component_id)
+    await state.set_state(BundleComponentState.awaiting_quantity)
+    await message.answer("Enter quantity for this component (integer > 0).")
+
+
+@router.message(BundleComponentState.awaiting_quantity)
+async def collect_bundle_quantity(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Bundle editing cancelled.")
+        return
+    try:
+        quantity = _parse_integer(message.text or "", allow_zero=False)
+    except ProductValidationError as exc:
+        await message.answer(str(exc))
+        return
+    data = await state.get_data()
+    bundle_product_id = data.get("bundle_product_id")
+    component_product_id = data.get("bundle_component_id")
+    service = ProductAdminService(session)
+    try:
+        await service.add_bundle_item(
+            bundle_product_id=bundle_product_id,
+            component_product_id=component_product_id,
+            quantity=quantity,
+        )
+    except BundleConfigurationError as exc:
+        await message.answer(str(exc))
+        return
+    except ProductNotFoundError:
+        await message.answer("Component product not found.")
+        return
+    await state.clear()
+    await message.answer("Component added to bundle.")
+    await render_bundle_components(message, session, bundle_product_id, as_new_message=True)
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "bundle_remove"))
+async def remove_bundle_component(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    product_id = callback_data.product_id
+    component_id = callback_data.target_id
+    if product_id is None or component_id is None:
+        await callback.answer()
+        return
+    service = ProductAdminService(session)
+    await service.remove_bundle_item(
+        bundle_product_id=product_id,
+        component_product_id=component_id,
+    )
+    await render_bundle_components(callback.message, session, product_id, as_new_message=False)
+    await callback.answer("Component removed.")
+
+
+# ---------------------------------------------------------------------------
+# Product relations management
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "relations"))
+async def handle_relations_view(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    product_id = callback_data.product_id
+    if product_id is None:
+        await callback.answer()
+        return
+    await render_relations_overview(callback.message, session, product_id, as_new_message=False)
+    await callback.answer()
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "relation_add"))
+async def start_relation_add(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    state: FSMContext,
+) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        await callback.answer("Finish the current operation first.", show_alert=True)
+        return
+    product_id = callback_data.product_id
+    if product_id is None:
+        await callback.answer()
+        return
+    await state.set_state(RelationCreateState.awaiting_product_id)
+    await state.update_data(relation_product_id=product_id)
+    await callback.message.answer(
+        "Send the related product ID.\nSend /cancel to abort."
+    )
+    await callback.answer()
+
+
+@router.message(RelationCreateState.awaiting_product_id)
+async def collect_relation_product(message: Message, state: FSMContext) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Relation creation cancelled.")
+        return
+    try:
+        related_id = _parse_integer(message.text or "", allow_zero=False)
+    except ProductValidationError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(related_product_id=related_id)
+    await state.set_state(RelationCreateState.awaiting_type)
+    choices = ", ".join(rel.value for rel in ProductRelationType)
+    await message.answer(
+        "Enter relation type (choose from: {choices}).".format(choices=choices)
+    )
+
+
+@router.message(RelationCreateState.awaiting_type)
+async def collect_relation_type(message: Message, state: FSMContext) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Relation creation cancelled.")
+        return
+    raw = (message.text or "").strip().lower().replace("-", "_")
+    try:
+        relation_type = ProductRelationType(raw)
+    except ValueError:
+        choices = ", ".join(rel.value for rel in ProductRelationType)
+        await message.answer(f"Invalid relation type. Choose from: {choices}")
+        return
+    await state.update_data(relation_type=relation_type.value)
+    await state.set_state(RelationCreateState.awaiting_weight)
+    await message.answer("Enter relation weight (integer, can be negative).")
+
+
+@router.message(RelationCreateState.awaiting_weight)
+async def collect_relation_weight(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    if _is_cancel_message(message):
+        await _cancel_state(message, state, "Relation creation cancelled.")
+        return
+    try:
+        weight = int((message.text or "0").strip())
+    except ValueError:
+        await message.answer("Enter a valid integer value for weight.")
+        return
+
+    data = await state.get_data()
+    product_id = data.get("relation_product_id")
+    related_product_id = data.get("related_product_id")
+    relation_type = ProductRelationType(data.get("relation_type"))
+
+    service = ProductAdminService(session)
+    try:
+        await service.add_relation(
+            product_id=product_id,
+            related_product_id=related_product_id,
+            relation_type=relation_type,
+            weight=weight,
+        )
+    except ProductNotFoundError:
+        await message.answer("One of the products no longer exists.")
+        await state.clear()
+        return
+    except ProductValidationError as exc:
+        await message.answer(str(exc))
+        return
+
+    await state.clear()
+    await message.answer("Relation saved.")
+    await render_relations_overview(message, session, product_id, as_new_message=True)
+
+
+@router.callback_query(ProductAdminCallback.filter(F.action == "relation_remove"))
+async def remove_relation(
+    callback: CallbackQuery,
+    callback_data: ProductAdminCallback,
+    session: AsyncSession,
+) -> None:
+    product_id = callback_data.product_id
+    related_id = callback_data.target_id
+    relation_value = callback_data.value
+    if product_id is None or related_id is None or not relation_value:
+        await callback.answer()
+        return
+    try:
+        relation_type = ProductRelationType(relation_value)
+    except ValueError:
+        await callback.answer("Unknown relation type.", show_alert=True)
+        return
+    service = ProductAdminService(session)
+    await service.remove_relation(
+        product_id=product_id,
+        related_product_id=related_id,
+        relation_type=relation_type,
+    )
+    await render_relations_overview(callback.message, session, product_id, as_new_message=False)
+    await callback.answer("Relation removed.")
 
 
 @router.callback_query(ProductAdminCallback.filter(F.action == "view"))

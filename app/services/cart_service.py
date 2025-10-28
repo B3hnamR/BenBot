@@ -84,6 +84,7 @@ class CartService:
             if not allow_increase:
                 raise ValueError("Product already in cart.")
             new_quantity = existing.quantity + quantity
+            self._ensure_quantity_allowed(product, new_quantity)
             total_amount = self._calc_line_total(unit_price, new_quantity)
             await self._carts.update_item(
                 existing,
@@ -92,6 +93,7 @@ class CartService:
             )
             item = existing
         else:
+            self._ensure_quantity_allowed(product, quantity)
             await self._session.refresh(cart, attribute_names=["items"])
             position = len(cart.items)
             total_amount = self._calc_line_total(unit_price, quantity)
@@ -120,6 +122,7 @@ class CartService:
             await self.refresh_totals(cart)
             await self._session.flush()
             return None
+        self._ensure_quantity_allowed(product, quantity)
         total_amount = self._calc_line_total(item.unit_price, quantity)
         await self._carts.update_item(item, quantity=quantity, total_amount=total_amount)
         await self.refresh_totals(cart)
@@ -227,3 +230,32 @@ class CartService:
     @staticmethod
     def _quantize(amount: Decimal) -> Decimal:
         return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    @staticmethod
+    def _ensure_quantity_allowed(product: Product, quantity: int) -> None:
+        if quantity <= 0:
+            raise ValueError("Quantity must be positive.")
+
+        max_per_order = getattr(product, "max_per_order", None)
+        if max_per_order is not None and quantity > max_per_order:
+            raise ValueError("Requested quantity exceeds per-order limit for this product.")
+
+        inventory = getattr(product, "inventory", None)
+        if inventory is not None and quantity > inventory:
+            raise ValueError("Requested quantity exceeds available stock.")
+
+        bundle_components = getattr(product, "bundle_components", None) or []
+        if bundle_components:
+            for component_link in bundle_components:
+                component = getattr(component_link, "component", None)
+                if component is None:
+                    continue
+                component_inventory = getattr(component, "inventory", None)
+                component_quantity = getattr(component_link, "quantity", 1) or 1
+                if component_inventory is None:
+                    continue
+                required = quantity * component_quantity
+                if required > component_inventory:
+                    raise ValueError(
+                        "Not enough inventory for bundle components."
+                    )
