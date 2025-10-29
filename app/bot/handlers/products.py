@@ -23,8 +23,13 @@ from app.bot.keyboards.orders import (
 from app.bot.keyboards.products import (
     PRODUCT_BACK_CALLBACK,
     PRODUCT_ADD_TO_CART_PREFIX,
+    PRODUCT_ALL_CALLBACK,
+    PRODUCT_CATEGORY_MENU_CALLBACK,
+    PRODUCT_CATEGORY_PREFIX,
+    PRODUCT_LIST_BACK_CALLBACK,
     PRODUCT_ORDER_PREFIX,
     PRODUCT_VIEW_PREFIX,
+    product_category_keyboard,
     product_details_keyboard,
     products_list_keyboard,
 )
@@ -32,7 +37,7 @@ from app.bot.keyboards.cart import cart_checkout_confirmation_keyboard
 from app.bot.states.order import OrderFlowState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus, ProductQuestionType
-from app.infrastructure.db.models import Order
+from app.infrastructure.db.models import Order, Product
 from app.infrastructure.db.repositories import UserRepository
 from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
@@ -40,8 +45,10 @@ from app.services.crypto_payment_service import (
     CryptoInvoiceResult,
     CryptoPaymentService,
 )
+from app.services.category_service import CategoryService
 from app.services.order_service import OrderCreationError, OrderService
 from app.services.product_service import ProductService
+from app.services.recommendation_service import RecommendationService
 
 
 router = Router(name="products")
@@ -127,31 +134,41 @@ async def initiate_product_order_flow(
 
 
 @router.callback_query(F.data == MainMenuCallback.PRODUCTS.value)
-async def handle_show_products(callback: CallbackQuery, session: AsyncSession) -> None:
-    service = ProductService(session)
-    products = await service.list_active_products()
+async def handle_show_products(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    category_service = CategoryService(session)
+    categories = await category_service.list_active_categories()
 
-    if not products:
-        await _safe_edit_message(
-            callback.message,
-            "No products are available yet. Please check back soon.",
-            reply_markup=main_menu_keyboard(
-                show_admin=_user_is_owner(callback.from_user.id)
-            ),
-        )
+    if categories:
+        await state.update_data(product_list_context=None)
+        await _render_category_menu(callback.message, categories)
         await callback.answer()
         return
 
-    await _safe_edit_message(
+    service = ProductService(session)
+    products = await service.list_active_products()
+    await _set_product_list_context(
+        state,
+        mode="all",
+        category_id=None,
+        back_callback=PRODUCT_BACK_CALLBACK,
+        category_name=None,
+    )
+    await _render_product_list(
         callback.message,
-        text="Choose a product to view details:",
-        reply_markup=products_list_keyboard(products),
+        products,
+        title="Available products:",
+        empty_message="No products are available yet. Please check back soon.",
+        back_callback=PRODUCT_BACK_CALLBACK,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith(PRODUCT_VIEW_PREFIX))
-async def handle_view_product(callback: CallbackQuery, session: AsyncSession) -> None:
+async def handle_view_product(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     product_id = int(callback.data.removeprefix(PRODUCT_VIEW_PREFIX))
     service = ProductService(session)
     product = await service.get_product(product_id)
@@ -159,6 +176,10 @@ async def handle_view_product(callback: CallbackQuery, session: AsyncSession) ->
     if product is None or not product.is_active:
         await callback.answer("Product is not available", show_alert=True)
         return
+
+    state_data = await state.get_data()
+    context = state_data.get("product_list_context") or {}
+    back_callback = context.get("back_callback", PRODUCT_BACK_CALLBACK)
 
     text_lines = [
         f"<b>{product.name}</b>",
@@ -173,8 +194,9 @@ async def handle_view_product(callback: CallbackQuery, session: AsyncSession) ->
     await _safe_edit_message(
         callback.message,
         body,
-        reply_markup=product_details_keyboard(product.id),
+        reply_markup=product_details_keyboard(product.id, back_callback=PRODUCT_LIST_BACK_CALLBACK),
     )
+    await _send_related_products(callback.message, session, product_id)
     await callback.answer()
 
 
@@ -188,6 +210,293 @@ async def handle_products_back(callback: CallbackQuery) -> None:
         ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == PRODUCT_ALL_CALLBACK)
+async def handle_all_products(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    service = ProductService(session)
+    products = await service.list_active_products()
+    await _set_product_list_context(
+        state,
+        mode="all",
+        category_id=None,
+        back_callback=PRODUCT_CATEGORY_MENU_CALLBACK,
+        category_name=None,
+    )
+    await _render_product_list(
+        callback.message,
+        products,
+        title="All products:",
+        empty_message="No products are available yet.",
+        back_callback=PRODUCT_CATEGORY_MENU_CALLBACK,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(PRODUCT_CATEGORY_PREFIX))
+async def handle_products_by_category(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    raw_category_id = callback.data.removeprefix(PRODUCT_CATEGORY_PREFIX)
+    try:
+        category_id = int(raw_category_id)
+    except ValueError:
+        await callback.answer("Unknown category.", show_alert=True)
+        return
+
+    category_service = CategoryService(session)
+    category = await category_service.get_category(category_id)
+    if category is None or not category.is_active:
+        await callback.answer("Category is not available", show_alert=True)
+        categories = await category_service.list_active_categories()
+        if categories:
+            await _render_category_menu(callback.message, categories)
+        else:
+            service = ProductService(session)
+            products = await service.list_active_products()
+            await _set_product_list_context(
+                state,
+                mode="all",
+                category_id=None,
+                back_callback=PRODUCT_BACK_CALLBACK,
+                category_name=None,
+            )
+            await _render_product_list(
+                callback.message,
+                products,
+                title="Available products:",
+                empty_message="No products are available yet.",
+                back_callback=PRODUCT_BACK_CALLBACK,
+            )
+        return
+
+    products = await category_service.list_category_products(category_id)
+    await _set_product_list_context(
+        state,
+        mode="category",
+        category_id=category.id,
+        back_callback=PRODUCT_CATEGORY_MENU_CALLBACK,
+        category_name=category.name,
+    )
+    await _render_product_list(
+        callback.message,
+        products,
+        title=f"{category.name}:",
+        empty_message="No products are available in this category yet.",
+        back_callback=PRODUCT_CATEGORY_MENU_CALLBACK,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == PRODUCT_CATEGORY_MENU_CALLBACK)
+async def handle_product_menu(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    category_service = CategoryService(session)
+    categories = await category_service.list_active_categories()
+    if categories:
+        await state.update_data(product_list_context=None)
+        await _render_category_menu(callback.message, categories)
+    else:
+        service = ProductService(session)
+        products = await service.list_active_products()
+        await _set_product_list_context(
+            state,
+            mode="all",
+            category_id=None,
+            back_callback=PRODUCT_BACK_CALLBACK,
+            category_name=None,
+        )
+        await _render_product_list(
+            callback.message,
+            products,
+            title="Available products:",
+            empty_message="No products are available yet.",
+            back_callback=PRODUCT_BACK_CALLBACK,
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == PRODUCT_LIST_BACK_CALLBACK)
+async def handle_product_list_back(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    context = data.get("product_list_context") or {}
+    await _show_products_from_context(callback.message, session, state, context)
+    await callback.answer()
+
+
+async def _render_category_menu(message: Message, categories: list) -> None:
+    await _safe_edit_message(
+        message,
+        "Browse products by category:",
+        reply_markup=product_category_keyboard(categories),
+    )
+
+
+async def _set_product_list_context(
+    state: FSMContext,
+    *,
+    mode: str,
+    category_id: int | None,
+    back_callback: str,
+    category_name: str | None,
+) -> None:
+    await state.update_data(
+        product_list_context={
+            "mode": mode,
+            "category_id": category_id,
+            "back_callback": back_callback,
+            "category_name": category_name,
+        }
+    )
+
+
+async def _render_product_list(
+    message: Message,
+    products: list[Product],
+    *,
+    title: str,
+    empty_message: str,
+    back_callback: str,
+) -> None:
+    if not products:
+        await _safe_edit_message(
+            message,
+            empty_message,
+            reply_markup=products_list_keyboard([], back_callback=back_callback),
+        )
+        return
+    await _safe_edit_message(
+        message,
+        title,
+        reply_markup=products_list_keyboard(products, back_callback=back_callback),
+    )
+
+
+async def _show_products_from_context(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    context: dict,
+) -> None:
+    mode = context.get("mode")
+    back_callback = context.get("back_callback", PRODUCT_BACK_CALLBACK)
+
+    if mode == "category":
+        category_id = context.get("category_id")
+        category_service = CategoryService(session)
+        if category_id is None:
+            categories = await category_service.list_active_categories()
+            if categories:
+                await state.update_data(product_list_context=None)
+                await _render_category_menu(message, categories)
+            else:
+                service = ProductService(session)
+                products = await service.list_active_products()
+                await _set_product_list_context(
+                    state,
+                    mode="all",
+                    category_id=None,
+                    back_callback=PRODUCT_BACK_CALLBACK,
+                    category_name=None,
+                )
+                await _render_product_list(
+                    message,
+                    products,
+                    title="Available products:",
+                    empty_message="No products are available yet.",
+                    back_callback=PRODUCT_BACK_CALLBACK,
+                )
+            return
+
+        category = await category_service.get_category(category_id)
+        if category is None or not category.is_active:
+            categories = await category_service.list_active_categories()
+            if categories:
+                await state.update_data(product_list_context=None)
+                await _render_category_menu(message, categories)
+            else:
+                service = ProductService(session)
+                products = await service.list_active_products()
+                await _set_product_list_context(
+                    state,
+                    mode="all",
+                    category_id=None,
+                    back_callback=PRODUCT_BACK_CALLBACK,
+                    category_name=None,
+                )
+                await _render_product_list(
+                    message,
+                    products,
+                    title="Available products:",
+                    empty_message="No products are available yet.",
+                    back_callback=PRODUCT_BACK_CALLBACK,
+                )
+            return
+
+        products = await category_service.list_category_products(category.id)
+        await _set_product_list_context(
+            state,
+            mode="category",
+            category_id=category.id,
+            back_callback=back_callback,
+            category_name=category.name,
+        )
+        await _render_product_list(
+            message,
+            products,
+            title=f"{category.name}:",
+            empty_message="No products are available in this category yet.",
+            back_callback=back_callback,
+        )
+        return
+
+    service = ProductService(session)
+    products = await service.list_active_products()
+    await _set_product_list_context(
+        state,
+        mode="all",
+        category_id=None,
+        back_callback=back_callback,
+        category_name=None,
+    )
+    await _render_product_list(
+        message,
+        products,
+        title="All products:",
+        empty_message="No products are available yet.",
+        back_callback=back_callback,
+    )
+
+
+async def _send_related_products(message: Message, session: AsyncSession, product_id: int) -> None:
+    recommendation_service = RecommendationService(session)
+    try:
+        related = await recommendation_service.get_related_products(product_id, limit=3)
+    except Exception:  # noqa: BLE001
+        return
+
+    related = [item for item in related if item.id != product_id and item.is_active]
+    if not related:
+        return
+
+    builder = InlineKeyboardBuilder()
+    for product in related:
+        builder.button(
+            text=f"{product.name} - {product.price} {product.currency}",
+            callback_data=f"{PRODUCT_VIEW_PREFIX}{product.id}",
+        )
+    builder.button(text="Back", callback_data=PRODUCT_LIST_BACK_CALLBACK)
+    builder.adjust(1)
+    await message.answer("You might also like:", reply_markup=builder.as_markup())
 
 
 @router.callback_query(F.data.startswith(PRODUCT_ADD_TO_CART_PREFIX))
