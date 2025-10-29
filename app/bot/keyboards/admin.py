@@ -23,6 +23,7 @@ class AdminMenuCallback(StrEnum):
     MANAGE_PRODUCTS = "admin:manage_products"
     MANAGE_USERS = "admin:manage_users"
     MANAGE_ORDERS = "admin:manage_orders"
+    MANAGE_LOYALTY = "admin:manage_loyalty"
     BACK_TO_MAIN = "admin:back_to_main"
 
 
@@ -52,6 +53,16 @@ class AdminOrderCallback(StrEnum):
     BACK = "admin:orders:back"
 
 
+class AdminLoyaltyCallback(StrEnum):
+    TOGGLE_ENABLED = "admin:loyalty:toggle_enabled"
+    SET_EARN_RATE = "admin:loyalty:set_earn_rate"
+    SET_REDEEM_RATIO = "admin:loyalty:set_redeem_ratio"
+    SET_MIN_REDEEM = "admin:loyalty:set_min_redeem"
+    TOGGLE_AUTO_EARN = "admin:loyalty:toggle_auto_earn"
+    TOGGLE_AUTO_PROMPT = "admin:loyalty:toggle_auto_prompt"
+    BACK = "admin:loyalty:back"
+
+
 ADMIN_ORDER_VIEW_PREFIX = "admin:orders:view:"
 ADMIN_ORDER_MARK_FULFILLED_PREFIX = "admin:orders:mark_fulfilled:"
 ADMIN_ORDER_MARK_PAID_PREFIX = "admin:orders:mark_paid:"
@@ -73,6 +84,7 @@ def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
     builder.button(text="Products", callback_data=AdminMenuCallback.MANAGE_PRODUCTS.value)
     builder.button(text="Users", callback_data=AdminMenuCallback.MANAGE_USERS.value)
     builder.button(text="Orders", callback_data=AdminMenuCallback.MANAGE_ORDERS.value)
+    builder.button(text="Loyalty & rewards", callback_data=AdminMenuCallback.MANAGE_LOYALTY.value)
     builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
     builder.adjust(1)
     return builder.as_markup()
@@ -169,6 +181,37 @@ def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyb
         callback_data=AdminOrderCallback.VIEW_RECENT.value,
     )
     builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def loyalty_settings_keyboard(config: "ConfigService.LoyaltySettings") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"Loyalty program: {'ON' if config.enabled else 'OFF'}",
+        callback_data=AdminLoyaltyCallback.TOGGLE_ENABLED.value,
+    )
+    builder.button(
+        text=f"Earn rate: {config.points_per_currency:.2f} pts / unit",
+        callback_data=AdminLoyaltyCallback.SET_EARN_RATE.value,
+    )
+    builder.button(
+        text=f"Redeem ratio: {config.redeem_ratio:.4f} currency / pt",
+        callback_data=AdminLoyaltyCallback.SET_REDEEM_RATIO.value,
+    )
+    builder.button(
+        text=f"Minimum redeem: {config.min_redeem_points} pts",
+        callback_data=AdminLoyaltyCallback.SET_MIN_REDEEM.value,
+    )
+    builder.button(
+        text=f"Auto-earn: {'ON' if config.auto_earn else 'OFF'}",
+        callback_data=AdminLoyaltyCallback.TOGGLE_AUTO_EARN.value,
+    )
+    builder.button(
+        text=f"Prompt users: {'ON' if config.auto_prompt else 'OFF'}",
+        callback_data=AdminLoyaltyCallback.TOGGLE_AUTO_PROMPT.value,
+    )
+    builder.button(text="Back", callback_data=AdminLoyaltyCallback.BACK.value)
     builder.adjust(1)
     return builder.as_markup()
 

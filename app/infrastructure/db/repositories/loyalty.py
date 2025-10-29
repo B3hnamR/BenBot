@@ -56,3 +56,18 @@ class LoyaltyRepository(BaseRepository):
         account.total_earned = (account.total_earned or Decimal("0")) + earned_delta
         account.total_redeemed = (account.total_redeemed or Decimal("0")) + redeemed_delta
         return account
+
+    async def get_transaction_by_id(self, transaction_id: int) -> LoyaltyTransaction | None:
+        result = await self.session.execute(
+            select(LoyaltyTransaction).where(LoyaltyTransaction.id == transaction_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update_transaction_meta(
+        self,
+        transaction: LoyaltyTransaction,
+        *,
+        meta: dict | None,
+    ) -> LoyaltyTransaction:
+        transaction.meta = meta
+        return transaction

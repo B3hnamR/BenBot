@@ -102,3 +102,78 @@ class LoyaltyService:
         if account is None:
             return Decimal("0")
         return account.balance
+
+    async def can_redeem_points(self, user_id: int, points: Decimal) -> bool:
+        if points <= Decimal("0"):
+            return True
+        balance = await self.get_balance(user_id)
+        return balance >= points
+
+    async def reserve_points(
+        self,
+        user_id: int,
+        *,
+        points: Decimal,
+        order_public_id: str,
+        value: Decimal | None = None,
+        currency: str | None = None,
+    ) -> LoyaltyTransaction:
+        if points <= Decimal("0"):
+            raise ValueError("Points to reserve must be positive.")
+        meta = {
+            "order_public_id": order_public_id,
+            "status": "reserved",
+        }
+        if value is not None:
+            meta["value"] = str(value)
+        if currency:
+            meta["currency"] = currency
+        return await self.redeem_points(
+            user_id,
+            amount=points,
+            reference=order_public_id,
+            description="Order loyalty redemption",
+            meta=meta,
+        )
+
+    async def finalize_reservation(
+        self,
+        transaction_id: int,
+        *,
+        status: str = "applied",
+    ) -> LoyaltyTransaction | None:
+        transaction = await self._accounts.get_transaction_by_id(transaction_id)
+        if transaction is None:
+            return None
+        meta = dict(transaction.meta or {})
+        meta["status"] = status
+        await self._accounts.update_transaction_meta(transaction, meta=meta)
+        await self._session.flush()
+        return transaction
+
+    async def restore_points(
+        self,
+        user_id: int,
+        *,
+        points: Decimal,
+        order_public_id: str,
+        reason: str = "cancelled",
+    ) -> LoyaltyTransaction:
+        if points <= Decimal("0"):
+            raise ValueError("Points to restore must be positive.")
+        meta = {
+            "order_public_id": order_public_id,
+            "status": "refunded",
+            "reason": reason,
+        }
+        return await self.adjust_balance(
+            user_id,
+            amount=points,
+            transaction_type=LoyaltyTransactionType.ADJUST,
+            reference=order_public_id,
+            description="Order loyalty refund",
+            meta=meta,
+        )
+
+    async def get_transaction(self, transaction_id: int) -> LoyaltyTransaction | None:
+        return await self._accounts.get_transaction_by_id(transaction_id)

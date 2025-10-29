@@ -58,6 +58,37 @@ class Settings(BaseSettings):
         description="Minimum number of seconds between support messages from the same user (0 disables the check).",
     )
 
+    loyalty_enabled_default: bool = Field(
+        False,
+        alias="LOYALTY_ENABLED_DEFAULT",
+        description="Whether the loyalty program is enabled by default.",
+    )
+    loyalty_points_per_currency_default: float = Field(
+        1.0,
+        alias="LOYALTY_POINTS_PER_CURRENCY_DEFAULT",
+        description="Number of loyalty points awarded per currency unit spent.",
+    )
+    loyalty_redeem_ratio_default: float = Field(
+        0.01,
+        alias="LOYALTY_REDEEM_RATIO_DEFAULT",
+        description="Currency value of each loyalty point (e.g., 0.01 = 1 point equals 0.01 currency).",
+    )
+    loyalty_min_redeem_points_default: int = Field(
+        100,
+        alias="LOYALTY_MIN_REDEEM_POINTS_DEFAULT",
+        description="Minimum number of points required before a user may redeem.",
+    )
+    loyalty_auto_earn_default: bool = Field(
+        True,
+        alias="LOYALTY_AUTO_EARN_DEFAULT",
+        description="Automatically award loyalty points when orders are paid.",
+    )
+    loyalty_auto_prompt_default: bool = Field(
+        True,
+        alias="LOYALTY_AUTO_PROMPT_DEFAULT",
+        description="Prompt users to redeem points during checkout when available.",
+    )
+
     payment_provider_token: str | None = Field(
         None,
         alias="PAYMENT_PROVIDER_TOKEN",

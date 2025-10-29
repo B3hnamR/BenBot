@@ -13,6 +13,7 @@ from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 from app.services.fulfillment_service import FulfillmentService
 from app.services.order_notification_service import OrderNotificationService
+from app.services.loyalty_order_service import finalize_loyalty_on_paid
 from app.services.order_summary import build_order_summary
 
 
@@ -50,6 +51,8 @@ async def ensure_fulfillment(
         return False
 
     await _ensure_relationships_loaded(session, order)
+
+    await finalize_loyalty_on_paid(session, order)
 
     user = order.user
     if user is None or user.telegram_id is None:

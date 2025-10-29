@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +14,7 @@ from app.bot.keyboards.admin import (
     AdminCryptoCallback,
     AdminMenuCallback,
     AdminOrderCallback,
+    AdminLoyaltyCallback,
     ADMIN_ORDER_MARK_FULFILLED_PREFIX,
     ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX,
     ADMIN_ORDER_MARK_PAID_PREFIX,
@@ -24,9 +26,11 @@ from app.bot.keyboards.admin import (
     order_manage_keyboard,
     order_settings_keyboard,
     recent_orders_keyboard,
+    loyalty_settings_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.states.admin_crypto import AdminCryptoState
+from app.bot.states.admin_loyalty import AdminLoyaltyState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order
@@ -35,6 +39,7 @@ from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
 from app.services.order_fulfillment import ensure_fulfillment
 from app.services.order_notification_service import OrderNotificationService
+from app.services.loyalty_order_service import refund_loyalty_for_order
 from app.services.order_service import OrderService
 from app.services.order_summary import build_order_summary
 
@@ -65,6 +70,79 @@ async def handle_manage_orders(callback: CallbackQuery, session: AsyncSession) -
     )
     await callback.answer()
 
+
+@router.callback_query(F.data == AdminMenuCallback.MANAGE_LOYALTY.value)
+async def handle_manage_loyalty(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    await _render_loyalty_settings_message(callback.message, session, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.TOGGLE_ENABLED.value)
+async def handle_loyalty_toggle_enabled(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    config_service = ConfigService(session)
+    current = await config_service.get_loyalty_settings()
+    updated = await config_service.save_loyalty_settings(
+        replace(current, enabled=not current.enabled)
+    )
+    notice = "Loyalty program enabled." if updated.enabled else "Loyalty program disabled."
+    await _render_loyalty_settings_message(callback.message, session, state, notice=notice, settings=updated)
+    await callback.answer("Loyalty setting updated.")
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.TOGGLE_AUTO_EARN.value)
+async def handle_loyalty_toggle_auto_earn(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    config_service = ConfigService(session)
+    current = await config_service.get_loyalty_settings()
+    updated = await config_service.save_loyalty_settings(
+        replace(current, auto_earn=not current.auto_earn)
+    )
+    notice = "Automatic earning enabled." if updated.auto_earn else "Automatic earning disabled."
+    await _render_loyalty_settings_message(callback.message, session, state, notice=notice, settings=updated)
+    await callback.answer("Loyalty setting updated.")
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.TOGGLE_AUTO_PROMPT.value)
+async def handle_loyalty_toggle_auto_prompt(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    config_service = ConfigService(session)
+    current = await config_service.get_loyalty_settings()
+    updated = await config_service.save_loyalty_settings(
+        replace(current, auto_prompt=not current.auto_prompt)
+    )
+    notice = "Checkout prompt enabled." if updated.auto_prompt else "Checkout prompt disabled."
+    await _render_loyalty_settings_message(callback.message, session, state, notice=notice, settings=updated)
+    await callback.answer("Loyalty setting updated.")
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.SET_EARN_RATE.value)
+async def handle_loyalty_set_earn_rate(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminLoyaltyState.set_earn_rate)
+    await callback.message.answer(
+        "Send the number of loyalty points awarded per currency unit spent (e.g., 1.5).\nSend /cancel to abort."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.SET_REDEEM_RATIO.value)
+async def handle_loyalty_set_redeem_ratio(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminLoyaltyState.set_redeem_ratio)
+    await callback.message.answer(
+        "Send the currency value of a single point (e.g., 0.01).\nSend /cancel to abort."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.SET_MIN_REDEEM.value)
+async def handle_loyalty_set_min_redeem(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminLoyaltyState.set_min_redeem)
+    await callback.message.answer(
+        "Send the minimum number of points a user must have before redeeming.\nSend /cancel to abort."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminLoyaltyCallback.BACK.value)
+async def handle_loyalty_back(callback: CallbackQuery, session: AsyncSession) -> None:
+    await handle_admin_menu(callback, session)
 
 @router.callback_query(F.data == AdminOrderCallback.TOGGLE_PAYMENT_ALERT.value)
 async def handle_toggle_payment_alert(callback: CallbackQuery, session: AsyncSession) -> None:
@@ -393,8 +471,10 @@ async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSess
             updated += 1
             if order.status == OrderStatus.CANCELLED:
                 await notifications.notify_cancelled(callback.bot, order, reason="provider_update")
+                await refund_loyalty_for_order(session, order, reason="provider_update")
             elif order.status == OrderStatus.EXPIRED:
                 await notifications.notify_expired(callback.bot, order, reason="provider_update")
+                await refund_loyalty_for_order(session, order, reason="provider_update")
         if order.status == OrderStatus.PAID:
             await ensure_fulfillment(session, callback.bot, order, source="admin_sync")
             continue
@@ -407,6 +487,7 @@ async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSess
             and previous_status != OrderStatus.EXPIRED
         ):
             await notifications.notify_expired(callback.bot, order, reason="admin_sync_timeout")
+            await refund_loyalty_for_order(session, order, reason="admin_sync_timeout")
 
     notice = f"Synced {len(orders)} invoice(s). Updated: {updated}."
     await _render_crypto_settings_message(callback.message, session, state, notice=notice)
@@ -681,6 +762,93 @@ async def process_crypto_callback_secret(message: Message, session: AsyncSession
     await config_service.save_crypto_settings(config)
     await message.answer("Callback secret updated.")
     await _update_crypto_settings_message_from_state(message, session, state, notice="Callback secret updated.")
+    await state.set_state(None)
+
+
+@router.message(AdminLoyaltyState.set_earn_rate)
+async def process_loyalty_earn_rate(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Send a numeric value (e.g., 1 or 1.5), or /cancel.")
+        return
+    if _is_cancel(text):
+        await message.answer("Operation cancelled.")
+        await _update_loyalty_settings_message_from_state(message, session, state)
+        await state.set_state(None)
+        return
+    try:
+        value = float(text)
+    except ValueError:
+        await message.answer("Please send a numeric value (e.g., 1 or 1.5).")
+        return
+    if value < 0:
+        await message.answer("Earn rate cannot be negative.")
+        return
+    config_service = ConfigService(session)
+    current = await config_service.get_loyalty_settings()
+    updated = await config_service.save_loyalty_settings(
+        replace(current, points_per_currency=value)
+    )
+    await message.answer("Earn rate updated.")
+    await _update_loyalty_settings_message_from_state(message, session, state, notice="Earn rate updated.", settings=updated)
+    await state.set_state(None)
+
+
+@router.message(AdminLoyaltyState.set_redeem_ratio)
+async def process_loyalty_redeem_ratio(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Send the currency value of one point (e.g., 0.01), or /cancel.")
+        return
+    if _is_cancel(text):
+        await message.answer("Operation cancelled.")
+        await _update_loyalty_settings_message_from_state(message, session, state)
+        await state.set_state(None)
+        return
+    try:
+        value = float(text)
+    except ValueError:
+        await message.answer("Please send a numeric value (e.g., 0.01).")
+        return
+    if value <= 0:
+        await message.answer("The redeem ratio must be greater than zero.")
+        return
+    config_service = ConfigService(session)
+    current = await config_service.get_loyalty_settings()
+    updated = await config_service.save_loyalty_settings(
+        replace(current, redeem_ratio=value)
+    )
+    await message.answer("Redeem ratio updated.")
+    await _update_loyalty_settings_message_from_state(message, session, state, notice="Redeem ratio updated.", settings=updated)
+    await state.set_state(None)
+
+
+@router.message(AdminLoyaltyState.set_min_redeem)
+async def process_loyalty_min_redeem(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Send the minimum redeemable points (integer), or /cancel.")
+        return
+    if _is_cancel(text):
+        await message.answer("Operation cancelled.")
+        await _update_loyalty_settings_message_from_state(message, session, state)
+        await state.set_state(None)
+        return
+    try:
+        value = int(text)
+    except ValueError:
+        await message.answer("Please send a valid integer value.")
+        return
+    if value < 0:
+        await message.answer("Minimum redeem points cannot be negative.")
+        return
+    config_service = ConfigService(session)
+    current = await config_service.get_loyalty_settings()
+    updated = await config_service.save_loyalty_settings(
+        replace(current, min_redeem_points=value)
+    )
+    await message.answer("Minimum redeem points updated.")
+    await _update_loyalty_settings_message_from_state(message, session, state, notice="Minimum redeem points updated.", settings=updated)
     await state.set_state(None)
 
 
@@ -1078,6 +1246,86 @@ def _format_order_receipt(order: Order) -> str:
             lines.append(f"License code: <code>{context['license_code']}</code>")
     lines.append("")
     lines.append("Thank you for your purchase!")
+    return "\n".join(lines)
+
+
+async def _render_loyalty_settings_message(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    *,
+    notice: str | None = None,
+    settings: ConfigService.LoyaltySettings | None = None,
+) -> None:
+    config_service = ConfigService(session)
+    settings = settings or await config_service.get_loyalty_settings()
+    text = _format_loyalty_settings_text(settings)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = loyalty_settings_keyboard(settings)
+    try:
+        await message.edit_text(text, reply_markup=markup)
+        target = message
+    except Exception:
+        target = await message.answer(text, reply_markup=markup)
+    await state.update_data(
+        loyalty_chat_id=target.chat.id,
+        loyalty_message_id=target.message_id,
+    )
+
+
+async def _update_loyalty_settings_message_from_state(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    *,
+    notice: str | None = None,
+    settings: ConfigService.LoyaltySettings | None = None,
+) -> None:
+    data = await state.get_data()
+    chat_id = data.get("loyalty_chat_id")
+    message_id = data.get("loyalty_message_id")
+    config_service = ConfigService(session)
+    settings = settings or await config_service.get_loyalty_settings()
+    text = _format_loyalty_settings_text(settings)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = loyalty_settings_keyboard(settings)
+    if chat_id and message_id:
+        try:
+            await message.bot.edit_message_text(
+                text=text,
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=markup,
+            )
+            await state.update_data(
+                loyalty_chat_id=chat_id,
+                loyalty_message_id=message_id,
+            )
+            return
+        except Exception:
+            pass
+    target = await message.answer(text, reply_markup=markup)
+    await state.update_data(
+        loyalty_chat_id=target.chat.id,
+        loyalty_message_id=target.message_id,
+    )
+
+
+def _format_loyalty_settings_text(settings: ConfigService.LoyaltySettings) -> str:
+    lines = [
+        "<b>Loyalty & rewards</b>",
+        f"Status: {'Enabled' if settings.enabled else 'Disabled'}",
+        f"Earn rate: {settings.points_per_currency:.2f} pts per currency unit",
+        f"Redeem ratio: {settings.redeem_ratio:.4f} currency per point",
+        f"Minimum redeem: {settings.min_redeem_points} pts",
+        f"Automatic earning: {'ON' if settings.auto_earn else 'OFF'}",
+        f"Prompt users at checkout: {'ON' if settings.auto_prompt else 'OFF'}",
+    ]
+    if settings.redeem_ratio > 0:
+        estimated_value = settings.redeem_ratio * max(settings.min_redeem_points, 1)
+        lines.append(f"Estimated value of minimum redeem: {estimated_value:.2f}")
     return "\n".join(lines)
 
 

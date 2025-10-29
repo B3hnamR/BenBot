@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -21,15 +21,21 @@ from app.bot.keyboards.cart import (
     cart_checkout_confirmation_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
-from app.infrastructure.db.repositories import UserRepository
+from app.infrastructure.db.repositories import OrderRepository, UserRepository
 from app.services.cart_service import CartService
 from app.services.product_service import ProductService
 from app.services.config_service import ConfigService
 from app.services.order_service import OrderService
+from app.services.loyalty_order_service import (
+    ensure_points_available,
+    reserve_loyalty_for_order,
+)
 from app.services.crypto_payment_service import CryptoPaymentService
 from app.bot.states.order import OrderFlowState
 
 router = Router(name="cart")
+
+CURRENCY_QUANT = Decimal("0.01")
 
 
 @router.callback_query(F.data == MainMenuCallback.CART.value)
@@ -134,19 +140,29 @@ async def handle_cart_checkout(callback: CallbackQuery, session: AsyncSession, s
             }
         )
 
+    totals_payload = {
+        "subtotal": str(totals.subtotal),
+        "discount": str(totals.discount),
+        "tax": str(totals.tax),
+        "shipping": str(totals.shipping),
+        "total": str(totals.total),
+    }
+
     await state.update_data(
         cart_checkout_queue=items_snapshot,
         cart_checkout_index=0,
         cart_answers=[],
-        cart_totals={
-            "subtotal": str(totals.subtotal),
-            "discount": str(totals.discount),
-            "tax": str(totals.tax),
-            "shipping": str(totals.shipping),
-            "total": str(totals.total),
-        },
+        cart_totals=dict(totals_payload),
+        cart_totals_base=dict(totals_payload),
         cart_currency=cart.currency,
         cart_id=cart.id,
+        cart_summary_message_chat=None,
+        cart_summary_message_id=None,
+        loyalty_prompt_status=None,
+        loyalty_redeem_points=None,
+        loyalty_redeem_value=None,
+        loyalty_total_due=None,
+        loyalty_mode=None,
     )
 
     await callback.answer("Starting checkout...")
@@ -185,12 +201,63 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
     config_service = ConfigService(session)
     timeout_minutes = await config_service.invoice_timeout_minutes()
 
-    total_amount = Decimal(totals.get("total", "0"))
+    base_total = Decimal(str(totals_base.get("total", totals.get("total", "0") or "0"))).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    loyalty_points = int(data.get("loyalty_redeem_points") or 0)
+    loyalty_value = Decimal(str(data.get("loyalty_redeem_value") or "0")).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    ratio = Decimal(str(data.get("loyalty_ratio") or "0")) if loyalty_points else Decimal("0")
+    total_due = Decimal(str(data.get("loyalty_total_due") or totals.get("total", "0") or "0")).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+
+    loyalty_warning = False
+    if loyalty_points > 0:
+        can_redeem = await ensure_points_available(session, profile.id, points=loyalty_points)
+        if not can_redeem:
+            loyalty_warning = True
+            loyalty_points = 0
+            loyalty_value = Decimal("0")
+            total_due = base_total
+    if loyalty_points == 0 or loyalty_value <= Decimal("0"):
+        loyalty_points = 0
+        loyalty_value = Decimal("0")
+        total_due = base_total
+    else:
+        total_due = max(Decimal("0"), min(total_due, base_total))
+        if ratio <= Decimal("0"):
+            ratio = (loyalty_value / Decimal(loyalty_points)).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+
+    totals["loyalty_discount"] = str(loyalty_value)
+    totals["total"] = str(total_due)
+    await state.update_data(cart_totals=totals)
+
+    loyalty_meta: dict[str, Any] | None = None
+    if loyalty_points > 0 and loyalty_value > Decimal("0"):
+        loyalty_meta = {
+            "redeem": {
+                "points": loyalty_points,
+                "value": str(loyalty_value),
+                "ratio": str(ratio),
+                "currency": currency,
+                "status": "pending",
+            }
+        }
+
     extra_attrs = {
         "cart_items": cart_queue,
         "cart_answers": answers,
         "cart_totals": totals,
     }
+    if loyalty_meta:
+        extra_attrs["loyalty"] = loyalty_meta
+
+    total_amount = total_due
 
     order = await order_service.create_order(
         user_id=profile.id,
@@ -201,6 +268,35 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
         currency_override=currency,
         extra_attrs=extra_attrs,
     )
+
+    loyalty_meta_reserved = loyalty_meta
+    if loyalty_points > 0 and loyalty_value > Decimal("0"):
+        try:
+            loyalty_meta_reserved = await reserve_loyalty_for_order(
+                session,
+                order,
+                profile.id,
+                points=loyalty_points,
+                value=loyalty_value,
+                ratio=ratio,
+                currency=currency,
+            )
+        except ValueError:
+            loyalty_warning = True
+            loyalty_meta_reserved = loyalty_meta or {}
+            redeem_meta = loyalty_meta_reserved.setdefault("redeem", {})
+            redeem_meta.update(
+                {
+                    "points": loyalty_points,
+                    "value": str(loyalty_value),
+                    "ratio": str(ratio),
+                    "currency": currency,
+                    "status": "failed",
+                }
+            )
+            await OrderRepository(session).merge_extra_attrs(order, {"loyalty": loyalty_meta_reserved})
+            order.extra_attrs = order.extra_attrs or {}
+            order.extra_attrs["loyalty"] = loyalty_meta_reserved
 
     email = _extract_cart_email(answers)
     crypto_service = CryptoPaymentService(session)
@@ -218,6 +314,14 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
     summary_text = _format_cart_summary(cart_queue, totals, currency, include_header=True)
     admin_summary = "; ".join(f"{item['name']} x{item['quantity']}" for item in cart_queue)
     admin_answers = [{"key": "Cart items", "prompt": "Cart items", "value": admin_summary}]
+    if loyalty_points > 0 and loyalty_value > Decimal("0"):
+        admin_answers.append(
+            {
+                "key": "Loyalty discount",
+                "prompt": "Loyalty discount",
+                "value": f"{loyalty_value} {currency} ({loyalty_points} pts)",
+            }
+        )
 
     from app.bot.handlers.products import _order_confirmation_keyboard, _notify_admins_of_order
 
@@ -242,6 +346,11 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
         admin_answers,
         crypto_result,
     )
+
+    if loyalty_warning:
+        await callback.message.answer(
+            "Loyalty points could not be applied because your available balance changed. No points were deducted."
+        )
 
     await callback.answer("Order created")
     await state.clear()
@@ -319,6 +428,8 @@ def _format_cart_summary(
         lines.append(f"Tax: {totals.get('tax')} {currency}")
     if Decimal(totals.get("shipping", "0")) > 0:
         lines.append(f"Shipping: {totals.get('shipping')} {currency}")
+    if Decimal(totals.get("loyalty_discount", "0")) > 0:
+        lines.append(f"Loyalty discount: -{totals.get('loyalty_discount')} {currency}")
     lines.append(f"Total: {totals.get('total', '0')} {currency}")
     return "\n".join(lines)
 

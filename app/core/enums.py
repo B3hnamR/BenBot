@@ -27,6 +27,12 @@ class SettingKey(StrEnum):
     SUPPORT_ANTISPAM_MAX_TICKETS_PER_WINDOW = "support.antispam.max_tickets_per_window"
     SUPPORT_ANTISPAM_WINDOW_MINUTES = "support.antispam.window_minutes"
     SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS = "support.antispam.min_reply_interval_seconds"
+    LOYALTY_ENABLED = "loyalty.enabled"
+    LOYALTY_POINTS_PER_CURRENCY = "loyalty.points_per_currency"
+    LOYALTY_REDEEM_RATIO = "loyalty.redeem_ratio"
+    LOYALTY_MIN_REDEEM_POINTS = "loyalty.min_redeem_points"
+    LOYALTY_AUTO_EARN = "loyalty.auto_earn"
+    LOYALTY_AUTO_PROMPT = "loyalty.auto_prompt"
 
 
 class OrderStatus(StrEnum):

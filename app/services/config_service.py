@@ -42,6 +42,15 @@ class ConfigService:
         window_minutes: int
         min_reply_interval_seconds: int
 
+    @dataclass
+    class LoyaltySettings:
+        enabled: bool
+        points_per_currency: float
+        redeem_ratio: float
+        min_redeem_points: int
+        auto_earn: bool
+        auto_prompt: bool
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._settings_repo = SettingsRepository(session)
@@ -224,6 +233,48 @@ class ConfigService:
             await self._ensure_value_default(
                 SettingKey.SUPPORT_ANTISPAM_MIN_REPLY_INTERVAL_SECONDS,
                 self._env_settings.support_antispam_min_reply_interval_seconds,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_ENABLED,
+            await self._ensure_bool_default(
+                SettingKey.LOYALTY_ENABLED,
+                self._env_settings.loyalty_enabled_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_POINTS_PER_CURRENCY,
+            await self._ensure_value_default(
+                SettingKey.LOYALTY_POINTS_PER_CURRENCY,
+                self._env_settings.loyalty_points_per_currency_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_REDEEM_RATIO,
+            await self._ensure_value_default(
+                SettingKey.LOYALTY_REDEEM_RATIO,
+                self._env_settings.loyalty_redeem_ratio_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_MIN_REDEEM_POINTS,
+            await self._ensure_value_default(
+                SettingKey.LOYALTY_MIN_REDEEM_POINTS,
+                self._env_settings.loyalty_min_redeem_points_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_AUTO_EARN,
+            await self._ensure_bool_default(
+                SettingKey.LOYALTY_AUTO_EARN,
+                self._env_settings.loyalty_auto_earn_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_AUTO_PROMPT,
+            await self._ensure_bool_default(
+                SettingKey.LOYALTY_AUTO_PROMPT,
+                self._env_settings.loyalty_auto_prompt_default,
             ),
         )
 
@@ -528,6 +579,79 @@ class ConfigService:
             config.callback_secret or "",
         )
         return await self.get_crypto_settings()
+
+    async def get_loyalty_settings(self) -> "ConfigService.LoyaltySettings":
+        enabled = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.LOYALTY_ENABLED,
+                default=self._env_settings.loyalty_enabled_default,
+            ),
+            self._env_settings.loyalty_enabled_default,
+        )
+        points_per_currency = self._safe_float(
+            await self._settings_repo.get_value(
+                SettingKey.LOYALTY_POINTS_PER_CURRENCY,
+                default=self._env_settings.loyalty_points_per_currency_default,
+            ),
+            float(self._env_settings.loyalty_points_per_currency_default),
+        )
+        redeem_ratio = self._safe_float(
+            await self._settings_repo.get_value(
+                SettingKey.LOYALTY_REDEEM_RATIO,
+                default=self._env_settings.loyalty_redeem_ratio_default,
+            ),
+            float(self._env_settings.loyalty_redeem_ratio_default),
+        )
+        min_redeem_points = self._safe_int(
+            await self._settings_repo.get_value(
+                SettingKey.LOYALTY_MIN_REDEEM_POINTS,
+                default=self._env_settings.loyalty_min_redeem_points_default,
+            ),
+            self._env_settings.loyalty_min_redeem_points_default,
+        )
+        auto_earn = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.LOYALTY_AUTO_EARN,
+                default=self._env_settings.loyalty_auto_earn_default,
+            ),
+            self._env_settings.loyalty_auto_earn_default,
+        )
+        auto_prompt = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.LOYALTY_AUTO_PROMPT,
+                default=self._env_settings.loyalty_auto_prompt_default,
+            ),
+            self._env_settings.loyalty_auto_prompt_default,
+        )
+        return self.LoyaltySettings(
+            enabled=enabled,
+            points_per_currency=max(0.0, points_per_currency),
+            redeem_ratio=max(0.0, redeem_ratio),
+            min_redeem_points=max(0, min_redeem_points),
+            auto_earn=auto_earn,
+            auto_prompt=auto_prompt,
+        )
+
+    async def save_loyalty_settings(
+        self,
+        config: "ConfigService.LoyaltySettings",
+    ) -> "ConfigService.LoyaltySettings":
+        await self._settings_repo.upsert(SettingKey.LOYALTY_ENABLED, bool(config.enabled))
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_POINTS_PER_CURRENCY,
+            float(config.points_per_currency),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_REDEEM_RATIO,
+            float(config.redeem_ratio),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.LOYALTY_MIN_REDEEM_POINTS,
+            max(0, int(config.min_redeem_points)),
+        )
+        await self._settings_repo.upsert(SettingKey.LOYALTY_AUTO_EARN, bool(config.auto_earn))
+        await self._settings_repo.upsert(SettingKey.LOYALTY_AUTO_PROMPT, bool(config.auto_prompt))
+        return await self.get_loyalty_settings()
 
     @staticmethod
     def _safe_int(value: int | str | None, default: int) -> int:
