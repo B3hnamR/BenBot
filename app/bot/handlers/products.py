@@ -347,6 +347,9 @@ async def finalize_order(
         await callback.answer("Review your cart and confirm.")
         return
 
+    # Answer immediately to avoid Telegram timeout while we process payment setup.
+    await callback.answer("Processing order...", cache_time=0)
+
     try:
         order = await order_service.create_order(
             user_id=profile.id,
@@ -373,7 +376,7 @@ async def finalize_order(
         _order_confirmation_message(order, product_name, answers, crypto_result),
         reply_markup=_order_confirmation_keyboard(crypto_result),
     )
-    await callback.answer("Order created")
+    await callback.message.answer("Order created. Check the message above for payment details.")
 
     await _notify_admins_of_order(callback, order, product_name, answers, crypto_result)
 
