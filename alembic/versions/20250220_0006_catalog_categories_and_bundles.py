@@ -97,10 +97,12 @@ def upgrade() -> None:
             ["component_product_id"],
         )
 
+    existing_columns = {column["name"] for column in inspector.get_columns("products")}
+
     with op.batch_alter_table("products") as batch_op:
-        if not inspector.has_column("products", "max_per_order"):
+        if "max_per_order" not in existing_columns:
             batch_op.add_column(sa.Column("max_per_order", sa.Integer(), nullable=True))
-        if not inspector.has_column("products", "inventory_threshold"):
+        if "inventory_threshold" not in existing_columns:
             batch_op.add_column(sa.Column("inventory_threshold", sa.Integer(), nullable=True))
 
 
