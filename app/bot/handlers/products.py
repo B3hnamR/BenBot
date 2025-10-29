@@ -713,16 +713,24 @@ def _format_cart_summary_for_confirmation(items: list[dict], totals: dict[str, s
 
 def _extract_email_from_answers(answers: list[dict[str, str | None]]) -> str | None:
     for item in answers:
-        value = (item.get("value") or "").strip()
-        if not value:
+        raw = (item.get("value") or "").strip()
+        if not raw:
             continue
+
+        candidates: list[str] = []
         if item.get("type") == ProductQuestionType.EMAIL.value:
-            return value
-        key = (item.get("key") or "").lower()
-        prompt = (item.get("prompt") or "").lower()
-        if "email" in key or "email" in prompt or re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
-            if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
-                return value
+            candidates = [seg.strip() for seg in re.split(r"[\n,]+", raw) if seg.strip()]
+        else:
+            key = (item.get("key") or "").lower()
+            prompt = (item.get("prompt") or "").lower()
+            if "email" in key or "email" in prompt:
+                candidates = [seg.strip() for seg in re.split(r"[\n,]+", raw) if seg.strip()]
+            elif re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", raw):
+                candidates = [raw]
+
+        for candidate in candidates:
+            if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", candidate):
+                return candidate
     return None
 
 
