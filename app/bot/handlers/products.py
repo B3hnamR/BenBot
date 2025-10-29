@@ -86,27 +86,43 @@ async def initiate_product_order_flow(
     cart_totals = state_data.get("cart_totals") if origin != "direct" else None
     cart_currency = state_data.get("cart_currency") if origin != "direct" else None
 
-    await state.set_state(OrderFlowState.collecting_answer)
-    await state.update_data(
-        product_id=product.id,
-        product_name=product.name,
-        price=str(product.price),
-        currency=product.currency,
-        questions=questions,
-        question_index=0,
-        answers=[],
-        origin=origin,
-        cart_checkout_index=cart_index,
-        cart_answers=cart_answers or [],
-        cart_totals=cart_totals,
-        cart_currency=cart_currency,
-    )
+    update_payload: dict[str, Any] = {
+        "product_id": product.id,
+        "product_name": product.name,
+        "price": str(product.price),
+        "currency": product.currency,
+        "questions": questions,
+        "origin": origin,
+        "cart_checkout_index": cart_index,
+        "cart_answers": cart_answers or [],
+        "cart_totals": cart_totals,
+        "cart_currency": cart_currency,
+    }
 
-    if questions:
-        await _prompt_question(callback.message, questions[0])
+    if origin != "direct" and cart_queue:
+        quantity = _resolve_cart_quantity(cart_queue, cart_index)
+        update_payload.update({
+            "quantity": quantity,
+            "question_index": 0,
+            "answers": [],
+        })
+        await state.update_data(**update_payload)
+        await _begin_question_flow(callback.message, state, quantity)
+        return True
+
+    existing_quantity = state_data.get("quantity")
+    update_payload.update({
+        "quantity": existing_quantity,
+        "question_index": 0,
+        "answers": [],
+    })
+    await state.update_data(**update_payload)
+
+    if existing_quantity is None:
+        await state.set_state(OrderFlowState.quantity)
+        await _prompt_quantity(callback.message, product)
     else:
-        await _show_order_confirmation(callback.message, state)
-        await state.set_state(OrderFlowState.confirm)
+        await _begin_question_flow(callback.message, state, max(1, int(existing_quantity or 1)))
     return True
 
 
@@ -255,8 +271,9 @@ async def collect_order_answer(message: Message, state: FSMContext) -> None:
             return
         answer_value: str | None = None
     else:
+        quantity = max(1, int(data.get("quantity", 1) or 1))
         try:
-            answer_value = _validate_answer(question, text)
+            answer_value = _validate_answer(question, text, quantity=quantity)
         except ValueError as exc:
             await message.answer(str(exc))
             return
@@ -278,7 +295,8 @@ async def collect_order_answer(message: Message, state: FSMContext) -> None:
         await _show_order_confirmation(message, state)
         await state.set_state(OrderFlowState.confirm)
     else:
-        await _prompt_question(message, questions[index])
+        quantity = max(1, int(data.get("quantity", 1) or 1))
+        await _prompt_question(message, questions[index], quantity=quantity)
 
 
 @router.callback_query(OrderFlowState.confirm, F.data == ORDER_CONFIRM_CALLBACK)
@@ -294,6 +312,7 @@ async def finalize_order(
     origin: str = data.get("origin", "direct")
     cart_queue: list[dict] | None = data.get("cart_checkout_queue")
     cart_index: int = int(data.get("cart_checkout_index", 0))
+    quantity: int = max(1, int(data.get("quantity", 1) or 1))
 
     order_service = OrderService(session)
     product = await order_service.get_product(product_id)
@@ -350,13 +369,18 @@ async def finalize_order(
     # Answer immediately to avoid Telegram timeout while we process payment setup.
     await callback.answer("Processing order...", cache_time=0)
 
+    order_kwargs: dict[str, Any] = {
+        "user_id": profile.id,
+        "product": product,
+        "answers": answer_pairs,
+        "invoice_timeout_minutes": timeout_minutes,
+        "extra_attrs": {"quantity": quantity},
+    }
+    if quantity > 1:
+        order_kwargs["total_override"] = Decimal(product.price) * quantity
+
     try:
-        order = await order_service.create_order(
-            user_id=profile.id,
-            product=product,
-            answers=answer_pairs,
-            invoice_timeout_minutes=timeout_minutes,
-        )
+        order = await order_service.create_order(**order_kwargs)
     except OrderCreationError as exc:
         await state.clear()
         await callback.answer(str(exc), show_alert=True)
@@ -371,14 +395,18 @@ async def finalize_order(
 
     await state.clear()
 
+    display_answers = list(answers)
+    if quantity > 1:
+        display_answers.append({"key": "quantity", "prompt": "Quantity", "value": str(quantity)})
+
     await _safe_edit_message(
         callback.message,
-        _order_confirmation_message(order, product_name, answers, crypto_result),
+        _order_confirmation_message(order, product_name, display_answers, crypto_result, quantity=quantity),
         reply_markup=_order_confirmation_keyboard(crypto_result),
     )
     await callback.message.answer("Order created. Check the message above for payment details.")
 
-    await _notify_admins_of_order(callback, order, product_name, answers, crypto_result)
+    await _notify_admins_of_order(callback, order, product_name, display_answers, crypto_result)
 
 @router.callback_query(OrderFlowState.confirm, F.data == ORDER_CANCEL_CALLBACK)
 async def cancel_order_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
@@ -392,7 +420,12 @@ async def ignore_cancel(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-async def _prompt_question(message: Message, question: dict[str, Any]) -> None:
+async def _prompt_question(
+    message: Message,
+    question: dict[str, Any],
+    *,
+    quantity: int = 1,
+) -> None:
     lines = [f"<b>{question['prompt']}</b>"]
     if question.get("help"):
         lines.append(question["help"])
@@ -404,6 +437,8 @@ async def _prompt_question(message: Message, question: dict[str, Any]) -> None:
             lines.append(f"Options: {joined}")
         else:
             lines.append(f"Select one or more (comma separated): {joined}")
+    if qtype == ProductQuestionType.EMAIL.value and quantity > 1:
+        lines.append(f"Enter {quantity} email addresses, one per line (or separated by commas).")
     if not question["required"]:
         lines.append("Send /skip to leave empty.")
     lines.append("Send /cancel to abort.")
@@ -434,12 +469,16 @@ async def _show_order_confirmation(message: Message, state: FSMContext) -> None:
     await message.answer("\n".join(lines), reply_markup=order_confirm_keyboard())
 
 
-def _validate_answer(question: dict[str, Any], value: str) -> str:
+def _validate_answer(question: dict[str, Any], value: str, *, quantity: int = 1) -> str:
     qtype = question["type"]
     if qtype == ProductQuestionType.EMAIL.value:
-        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
-            raise ValueError("Enter a valid email address.")
-        return value.strip()
+        entries = _split_multivalue(value, quantity)
+        emails: list[str] = []
+        for entry in entries:
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", entry):
+                raise ValueError("Enter valid email addresses (one per line).")
+            emails.append(entry.strip())
+        return "\n".join(emails)
 
     if qtype == ProductQuestionType.PHONE.value:
         cleaned = value.replace(" ", "")
@@ -478,11 +517,23 @@ def _validate_answer(question: dict[str, Any], value: str) -> str:
     return value.strip()
 
 
+def _split_multivalue(raw: str, quantity: int) -> list[str]:
+    if quantity <= 1:
+        return [raw.strip()]
+    normalized = raw.replace(",", "\n")
+    entries = [item.strip() for item in normalized.splitlines() if item.strip()]
+    if len(entries) != quantity:
+        raise ValueError(f"Enter {quantity} values, one per line.")
+    return entries
+
+
 def _order_confirmation_message(
     order: Order,
     product_name: str,
     answers: list[dict[str, str | None]],
     crypto: CryptoInvoiceResult | None,
+    *,
+    quantity: int = 1,
 ) -> str:
     expires_text = ""
     if order.payment_expires_at:
@@ -501,6 +552,8 @@ def _order_confirmation_message(
         f"Status: {order.status.value.replace('_', ' ').title()}",
         f"Total: {order.total_amount} {order.currency}",
     ]
+    if quantity > 1:
+        lines.insert(3, f"Quantity: {quantity}")
     if order.invoice_payload:
         lines.append(f"Payment reference: <code>{order.invoice_payload}</code>")
     if answers:
@@ -525,6 +578,45 @@ def _order_confirmation_message(
                 lines.append(f"Last known status: {crypto.status}")
     lines.append("\nPlease follow the payment instructions provided by the team.")
     return "\n".join(lines)
+
+
+async def _prompt_quantity(message: Message, product) -> None:
+    lines = [
+        f"<b>{product.name}</b>",
+        "How many units would you like to purchase?",
+        "Send an integer greater than zero.",
+    ]
+    if product.max_per_order is not None:
+        lines.append(f"Maximum per order: {product.max_per_order}.")
+    if product.inventory is not None:
+        lines.append(f"In stock: {product.inventory}.")
+    lines.append("Send /skip to keep quantity 1.")
+    lines.append("Send /cancel to abort.")
+    await message.answer("\n".join(lines))
+
+
+async def _begin_question_flow(target_message: Message, state: FSMContext, quantity: int) -> None:
+    quantity = max(1, quantity)
+    await state.update_data(quantity=quantity, question_index=0, answers=[])
+    await state.set_state(OrderFlowState.collecting_answer)
+    data = await state.get_data()
+    questions: List[dict[str, Any]] = data.get("questions", [])
+    if questions:
+        await _prompt_question(target_message, questions[0], quantity=quantity)
+    else:
+        await _show_order_confirmation(target_message, state)
+        await state.set_state(OrderFlowState.confirm)
+
+
+def _resolve_cart_quantity(cart_queue: list[dict[str, Any]], index: int) -> int:
+    try:
+        raw = cart_queue[index]["quantity"]
+        quantity = int(raw)
+    except (KeyError, ValueError, TypeError, IndexError):
+        quantity = 1
+    if quantity <= 0:
+        quantity = 1
+    return quantity
 
 
 async def _cancel_order_flow(message: Message, state: FSMContext, text: str) -> None:
@@ -649,3 +741,47 @@ async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:
 def _user_is_owner(user_id: int) -> bool:
     settings = get_settings()
     return user_id in settings.owner_user_ids
+@router.message(OrderFlowState.quantity)
+async def collect_order_quantity(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    text = (message.text or "").strip()
+    if text.lower() == "/cancel":
+        await _cancel_order_flow(message, state, "Order cancelled.")
+        return
+
+    if text.lower() in {"", "/skip"}:
+        quantity = 1
+    else:
+        if not text.isdigit():
+            await message.answer("Enter a valid quantity (integer greater than zero).")
+            return
+        quantity = int(text)
+        if quantity <= 0:
+            await message.answer("Quantity must be greater than zero.")
+            return
+
+    data = await state.get_data()
+    product_id = data.get("product_id")
+    if not product_id:
+        await _cancel_order_flow(message, state, "Order data lost. Please start again.")
+        return
+
+    order_service = OrderService(session)
+    product = await order_service.get_product(product_id)
+    if product is None or not product.is_active:
+        await _cancel_order_flow(message, state, "Product is not available.")
+        return
+
+    if product.max_per_order is not None and quantity > product.max_per_order:
+        await message.answer(
+            f"You can purchase up to {product.max_per_order} units of this product per order."
+        )
+        return
+
+    if product.inventory is not None and quantity > product.inventory:
+        await message.answer(
+            f"Only {product.inventory} unit(s) are currently available."
+        )
+        return
+
+    await state.update_data(quantity=quantity)
+    await _begin_question_flow(message, state, quantity)
