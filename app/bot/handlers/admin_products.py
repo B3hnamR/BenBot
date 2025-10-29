@@ -111,6 +111,7 @@ def _format_product_details(product) -> str:
 
     return (
         f"<b>{html.escape(product.name)}</b>\n"
+        f"ID: {product.id}\n"
         f"Status: {status}\n"
         f"Price: {format_price(product.price)} {product.currency}\n"
         f"Inventory: {inventory}\n"
