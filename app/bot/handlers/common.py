@@ -59,6 +59,16 @@ async def handle_start(message: Message) -> None:
     )
 
 
+@router.callback_query(F.data == MainMenuCallback.HOME.value)
+async def handle_main_menu(callback: CallbackQuery) -> None:
+    await _safe_edit_message(
+        callback.message,
+        "Main menu",
+        reply_markup=main_menu_keyboard(show_admin=_user_is_owner(callback.from_user.id)),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == MainMenuCallback.ACCOUNT.value)
 async def handle_account(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     await _render_orders_overview(callback, session, state=state)
@@ -201,7 +211,7 @@ async def handle_profile(callback: CallbackQuery, session: AsyncSession, state: 
 
     builder = InlineKeyboardBuilder()
     builder.button(text="My orders", callback_data=MainMenuCallback.ACCOUNT.value)
-    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
     builder.adjust(1)
 
     await _safe_edit_message(

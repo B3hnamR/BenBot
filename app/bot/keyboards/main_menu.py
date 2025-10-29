@@ -7,6 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 class MainMenuCallback(StrEnum):
+    HOME = "menu:home"
     PRODUCTS = "menu:products"
     CART = "menu:cart"
     ACCOUNT = "menu:account"
