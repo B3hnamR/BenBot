@@ -1,13 +1,16 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
@@ -27,8 +30,13 @@ from app.bot.keyboards.subscription import (
 from app.core.config import get_settings
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order
-from app.infrastructure.db.repositories import RequiredChannelRepository, UserRepository
+from app.infrastructure.db.repositories import (
+    RequiredChannelRepository,
+    SupportRepository,
+    UserRepository,
+)
 from app.services.container import membership_service
+from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
 from app.services.order_service import OrderService
 from app.services.order_fulfillment import ensure_fulfillment
@@ -54,6 +62,153 @@ async def handle_start(message: Message) -> None:
 @router.callback_query(F.data == MainMenuCallback.ACCOUNT.value)
 async def handle_account(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     await _render_orders_overview(callback, session, state=state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == MainMenuCallback.PROFILE.value)
+async def handle_profile(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    user_repo = UserRepository(session)
+    profile = await user_repo.get_by_telegram_id(callback.from_user.id)
+    if profile is None:
+        await callback.answer("We could not locate your profile. Try again later.", show_alert=True)
+        return
+
+    await session.refresh(profile, attribute_names=["loyalty_account", "referral_links"])
+
+    config_service = ConfigService(session)
+    loyalty_settings = await config_service.get_loyalty_settings()
+    default_currency = await config_service.payment_currency()
+
+    order_service = OrderService(session)
+    orders = await order_service.list_user_orders(profile.id)
+    status_counts = Counter(order.status for order in orders)
+    if orders:
+        last_order = orders[0]
+        product_name = last_order.product.name if last_order.product else "—"
+        created = _format_datetime(last_order.created_at)
+        last_order_line = (
+            f"{last_order.status.value.replace('_', ' ').title()} · "
+            f"{last_order.total_amount} {last_order.currency} · "
+            f"{product_name} · {created}"
+        )
+    else:
+        last_order_line = "No orders yet."
+
+    loyalty_account = profile.loyalty_account
+    balance = (loyalty_account.balance if loyalty_account else Decimal("0")) or Decimal("0")
+    total_earned = (loyalty_account.total_earned if loyalty_account else Decimal("0")) or Decimal("0")
+    total_redeemed = (loyalty_account.total_redeemed if loyalty_account else Decimal("0")) or Decimal("0")
+    redeem_ratio = Decimal(str(loyalty_settings.redeem_ratio)) if loyalty_settings.redeem_ratio else Decimal("0")
+    balance_value = (balance * redeem_ratio).quantize(Decimal("0.01")) if redeem_ratio > 0 else Decimal("0.00")
+
+    cart_service = CartService(session)
+    active_cart = await cart_service.get_active_cart(profile.id)
+    cart_lines: list[str] = []
+    if active_cart and active_cart.items:
+        totals = await cart_service.refresh_totals(active_cart)
+        cart_lines.append(f"Items: {len(active_cart.items)}")
+        cart_lines.append(f"Total: {totals.total} {active_cart.currency}")
+    else:
+        cart_lines.append("No active cart.")
+
+    support_repo = SupportRepository(session)
+    open_tickets = await support_repo.count_open_by_user(profile.id)
+
+    referral_links = profile.referral_links or []
+    total_clicks = sum(link.total_clicks for link in referral_links)
+    total_signups = sum(link.total_signups for link in referral_links)
+    total_orders = sum(link.total_orders for link in referral_links)
+
+    membership_required = await membership_service.is_subscription_required(session)
+    membership_lines: list[str] = []
+    if membership_required:
+        channel_repo = RequiredChannelRepository(session)
+        channels = await channel_repo.list_active()
+        is_member = await membership_service.user_can_access(
+            callback.bot,
+            profile.telegram_id,
+            session,
+            channels,
+        )
+        membership_lines.append(f"Status: {'✅ Member' if is_member else '⚠️ Not verified'}")
+        if channels:
+            membership_lines.append("Required channels:")
+            for channel in channels:
+                label = channel.username or (str(channel.channel_id) if channel.channel_id else "Unknown channel")
+                membership_lines.append(f" • {label}")
+    else:
+        membership_lines.append("Subscription check is disabled.")
+
+    order_lines = [f"Total orders: {len(orders)}"]
+    for status in (
+        OrderStatus.AWAITING_PAYMENT,
+        OrderStatus.PAID,
+        OrderStatus.EXPIRED,
+        OrderStatus.CANCELLED,
+    ):
+        count = status_counts.get(status, 0)
+        if count:
+            order_lines.append(f"{status.value.replace('_', ' ').title()}: {count}")
+    order_lines.append(f"Last order: {last_order_line}")
+
+    loyalty_lines = [
+        f"Balance: {balance} pts (~{balance_value} {default_currency})",
+        f"Total earned: {total_earned} pts",
+        f"Total redeemed: {total_redeemed} pts",
+        f"Earn rate: {loyalty_settings.points_per_currency:.2f} pts per {default_currency}",
+        f"Redeem ratio: {redeem_ratio:.4f} {default_currency} per pt",
+        f"Minimum redeem: {loyalty_settings.min_redeem_points} pts",
+        f"Auto earn: {'ON' if loyalty_settings.auto_earn else 'OFF'}",
+        f"Checkout prompt: {'ON' if loyalty_settings.auto_prompt else 'OFF'}",
+    ]
+
+    referral_lines: list[str] = []
+    if referral_links:
+        referral_lines.append(f"Links created: {len(referral_links)}")
+        referral_lines.append(f"Total clicks: {total_clicks}")
+        referral_lines.append(f"Sign-ups: {total_signups}")
+        referral_lines.append(f"Orders via referrals: {total_orders}")
+    else:
+        referral_lines.append("No referral links yet.")
+
+    lines = [
+        "<b>Your profile</b>",
+        f"Name: {profile.display_name()}",
+        f"Username: @{profile.username}" if profile.username else "Username: -",
+        f"Telegram ID: {profile.telegram_id}",
+        f"Language: {profile.language_code or '-'}",
+        f"Joined: {_format_datetime(profile.created_at)}",
+        f"Last seen: {_format_datetime(profile.last_seen_at)}",
+        "",
+        "<b>Membership</b>",
+        *membership_lines,
+        "",
+        "<b>Loyalty</b>",
+        *loyalty_lines,
+        "",
+        "<b>Orders</b>",
+        *order_lines,
+        "",
+        "<b>Cart</b>",
+        *cart_lines,
+        "",
+        "<b>Support</b>",
+        f"Open tickets: {open_tickets}",
+        "",
+        "<b>Referrals</b>",
+        *referral_lines,
+    ]
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="My orders", callback_data=MainMenuCallback.ACCOUNT.value)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
+    builder.adjust(1)
+
+    await _safe_edit_message(
+        callback.message,
+        "\n".join(lines),
+        reply_markup=builder.as_markup(),
+    )
     await callback.answer()
 
 
@@ -432,6 +587,13 @@ def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None =
                     lines.append(f" - {detail}")
 
     return "\n".join(lines)
+
+
+def _format_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    aware = _ensure_utc(value)
+    return f"{aware:%Y-%m-%d %H:%M UTC}"
 
 
 async def _safe_edit_message(message, text: str, *, reply_markup=None) -> None:
