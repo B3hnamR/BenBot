@@ -47,12 +47,14 @@ class Product(IntPKMixin, TimestampMixin, Base):
         secondary="product_categories",
         back_populates="products",
         order_by="Category.position.asc()",
+        overlaps="category_links,product",
     )
     category_links: Mapped[list["ProductCategory"]] = relationship(
         "ProductCategory",
         back_populates="product",
         cascade="all, delete-orphan",
         order_by="ProductCategory.position.asc()",
+        overlaps="categories,category",
     )
     bundle_components: Mapped[list["ProductBundleItem"]] = relationship(
         "ProductBundleItem",
