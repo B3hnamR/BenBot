@@ -21,7 +21,7 @@ class Category(IntPKMixin, TimestampMixin, Base):
         secondary="product_categories",
         back_populates="categories",
         order_by="Product.position.asc()",
-        overlaps="product_links,product",
+        overlaps="product_links,product,category_links",
     )
     product_links: Mapped[list["ProductCategory"]] = relationship(
         "ProductCategory",
@@ -52,11 +52,11 @@ class ProductCategory(IntPKMixin, TimestampMixin, Base):
         "Product",
         back_populates="category_links",
         foreign_keys=[product_id],
-        overlaps="categories,product_links",
+        overlaps="categories,product_links,category",
     )
     category: Mapped[Category] = relationship(
         Category,
         back_populates="product_links",
         foreign_keys=[category_id],
-        overlaps="products,category_links",
+        overlaps="products,category_links,categories",
     )
