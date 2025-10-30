@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, delete, distinct, func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.enums import CouponStatus
@@ -87,6 +87,28 @@ class CouponRepository(BaseRepository):
         )
         return int(result.rowcount or 0)
 
+    async def list_recent_redemptions(self, coupon_id: int, limit: int = 5) -> list[CouponRedemption]:
+        stmt = (
+            select(CouponRedemption)
+            .options(
+                selectinload(CouponRedemption.user),
+                selectinload(CouponRedemption.order),
+            )
+            .where(CouponRedemption.coupon_id == coupon_id)
+            .order_by(CouponRedemption.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().unique().all())
+
+    async def count_unique_users(self, coupon_id: int) -> int:
+        result = await self.session.execute(
+            select(func.count(distinct(CouponRedemption.user_id))).where(
+                CouponRedemption.coupon_id == coupon_id
+            )
+        )
+        return int(result.scalar_one())
+
     async def count_redemptions(self, coupon_id: int) -> int:
         result = await self.session.execute(
             select(func.count()).select_from(CouponRedemption).where(CouponRedemption.coupon_id == coupon_id)
@@ -103,3 +125,7 @@ class CouponRepository(BaseRepository):
             )
         )
         return int(result.scalar_one())
+
+    async def delete_coupon(self, coupon: Coupon) -> None:
+        await self.session.delete(coupon)
+        await self.session.flush()

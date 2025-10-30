@@ -81,6 +81,21 @@ class CouponService:
         await self._session.flush()
         return coupon
 
+    async def delete_coupon(self, coupon: Coupon) -> None:
+        await self._repo.delete_coupon(coupon)
+
+    async def usage_summary(self, coupon: Coupon, *, recent_limit: int = 5) -> dict[str, object]:
+        if coupon.id is None:
+            return {"total": 0, "unique_users": 0, "recent": []}
+        total = await self._repo.count_redemptions(coupon.id)
+        unique_users = await self._repo.count_unique_users(coupon.id)
+        recent = await self._repo.list_recent_redemptions(coupon.id, limit=recent_limit)
+        return {
+            "total": total,
+            "unique_users": unique_users,
+            "recent": recent,
+        }
+
     def _calculate_discount(self, coupon: Coupon, order_total: Decimal) -> Decimal:
         if coupon.coupon_type == CouponType.FIXED:
             value = coupon.amount or Decimal("0")

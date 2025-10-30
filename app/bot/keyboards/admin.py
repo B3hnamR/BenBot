@@ -78,6 +78,13 @@ ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:ord:delv:"
 ADMIN_RECENT_ORDERS_PAGE_PREFIX = "admin:orders:recent_page:"
 ADMIN_COUPON_VIEW_PREFIX = "admin:coupon:view:"
 ADMIN_COUPON_TOGGLE_PREFIX = "admin:coupon:toggle:"
+ADMIN_COUPON_EDIT_MENU_PREFIX = "admin:coupon:editmenu:"
+ADMIN_COUPON_EDIT_FIELD_PREFIX = "admin:coupon:edit:"
+ADMIN_COUPON_USAGE_PREFIX = "admin:coupon:usage:"
+ADMIN_COUPON_DELETE_PREFIX = "admin:coupon:delete:"
+ADMIN_COUPON_DELETE_CONFIRM_PREFIX = "admin:coupon:delete_confirm:"
+ADMIN_COUPON_TOGGLE_AUTO_PREFIX = "admin:coupon:auto:"
+ADMIN_COUPON_EDIT_TYPE_PREFIX = "admin:coupon:edit_type:"
 
 
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
@@ -248,7 +255,101 @@ def coupon_details_keyboard(coupon: "Coupon") -> InlineKeyboardMarkup:
         text=toggle_text,
         callback_data=f"{ADMIN_COUPON_TOGGLE_PREFIX}{coupon.id}",
     )
+    builder.button(
+        text=f"Auto-apply: {'ON' if getattr(coupon, 'auto_apply', False) else 'OFF'}",
+        callback_data=f"{ADMIN_COUPON_TOGGLE_AUTO_PREFIX}{coupon.id}",
+    )
+    builder.button(
+        text="Edit fields",
+        callback_data=f"{ADMIN_COUPON_EDIT_MENU_PREFIX}{coupon.id}",
+    )
+    builder.button(
+        text="Usage stats",
+        callback_data=f"{ADMIN_COUPON_USAGE_PREFIX}{coupon.id}",
+    )
+    builder.button(
+        text="Delete coupon",
+        callback_data=f"{ADMIN_COUPON_DELETE_PREFIX}{coupon.id}",
+    )
     builder.button(text="Back", callback_data=AdminCouponCallback.REFRESH.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def coupon_edit_keyboard(coupon: "Coupon") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Change name",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}name:{coupon.id}",
+    )
+    builder.button(
+        text="Change description",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}description:{coupon.id}",
+    )
+    builder.button(
+        text="Change type",
+        callback_data=f"{ADMIN_COUPON_EDIT_TYPE_PREFIX}{coupon.id}",
+    )
+    builder.button(
+        text="Change value",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}value:{coupon.id}",
+    )
+    builder.button(
+        text="Set minimum order",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}min_total:{coupon.id}",
+    )
+    builder.button(
+        text="Set max discount",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}max_discount:{coupon.id}",
+    )
+    builder.button(
+        text="Set total limit",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}max_redemptions:{coupon.id}",
+    )
+    builder.button(
+        text="Set per-user limit",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}per_user_limit:{coupon.id}",
+    )
+    builder.button(
+        text="Set start date",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}start_at:{coupon.id}",
+    )
+    builder.button(
+        text="Set end date",
+        callback_data=f"{ADMIN_COUPON_EDIT_FIELD_PREFIX}end_at:{coupon.id}",
+    )
+    builder.button(
+        text="Back to coupon",
+        callback_data=f"{ADMIN_COUPON_VIEW_PREFIX}{coupon.id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def coupon_usage_keyboard(coupon_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Refresh usage",
+        callback_data=f"{ADMIN_COUPON_USAGE_PREFIX}{coupon_id}",
+    )
+    builder.button(
+        text="Back to coupon",
+        callback_data=f"{ADMIN_COUPON_VIEW_PREFIX}{coupon_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def coupon_delete_confirm_keyboard(coupon_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Yes, delete",
+        callback_data=f"{ADMIN_COUPON_DELETE_CONFIRM_PREFIX}{coupon_id}",
+    )
+    builder.button(
+        text="Back to coupon",
+        callback_data=f"{ADMIN_COUPON_VIEW_PREFIX}{coupon_id}",
+    )
     builder.adjust(1)
     return builder.as_markup()
 

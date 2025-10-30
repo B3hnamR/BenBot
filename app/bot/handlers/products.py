@@ -1438,8 +1438,10 @@ async def _resume_after_coupon(message: Message, state: FSMContext, session: Asy
     data = await state.get_data()
     origin = data.get("origin", "direct")
     if origin == "direct":
-        quantity = max(1, int(data.get("quantity", 1) or 1))
-        await _begin_question_flow(message, state, session, quantity)
+        if await _maybe_prompt_loyalty(message, state, session, mode="direct"):
+            return
+        await _show_order_confirmation(message, state)
+        await state.set_state(OrderFlowState.confirm)
         return
 
     status = await _continue_cart_flow_after_discounts(
