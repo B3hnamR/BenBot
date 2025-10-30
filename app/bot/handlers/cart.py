@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 
 from aiogram import F, Router
@@ -23,8 +23,9 @@ from app.bot.keyboards.cart import (
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.infrastructure.db.repositories import OrderRepository, UserRepository
 from app.services.cart_service import CartService
-from app.services.product_service import ProductService
 from app.services.config_service import ConfigService
+from app.services.coupon_service import CouponService
+from app.services.product_service import ProductService
 from app.services.order_service import OrderService
 from app.services.loyalty_order_service import (
     ensure_points_available,
@@ -158,6 +159,12 @@ async def handle_cart_checkout(callback: CallbackQuery, session: AsyncSession, s
         cart_id=cart.id,
         cart_summary_message_chat=None,
         cart_summary_message_id=None,
+        coupon_prompt_status=None,
+        coupon_code=None,
+        coupon_discount_value=None,
+        coupon_id=None,
+        coupon_mode="cart",
+        coupon_base_amount=str(totals_payload.get("total", totals_payload.get("subtotal", "0"))),
         loyalty_prompt_status=None,
         loyalty_redeem_points=None,
         loyalty_redeem_value=None,
@@ -201,17 +208,58 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
     config_service = ConfigService(session)
     timeout_minutes = await config_service.invoice_timeout_minutes()
 
-    base_total = Decimal(str(totals_base.get("total", totals.get("total", "0") or "0"))).quantize(
+    totals_base = data.get("cart_totals_base") or {}
+    base_total = Decimal(str(totals_base.get("total") or totals.get("total") or "0")).quantize(
         CURRENCY_QUANT,
         rounding=ROUND_HALF_UP,
     )
+
+    coupon_code = (data.get("coupon_code") or "").strip() or None
+    coupon_discount_state = Decimal(str(data.get("coupon_discount_value") or "0")).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    coupon_meta: dict[str, Any] | None = None
+    coupon_discount = Decimal("0")
+    coupon_warning = False
+    coupon = None
+    coupon_service = CouponService(session)
+
+    if coupon_code:
+        coupon = await coupon_service.get_coupon(coupon_code)
+        if coupon is None:
+            coupon_warning = True
+        else:
+            try:
+                await coupon_service.validate_coupon(coupon, user_id=profile.id, order_total=base_total)
+            except ValueError:
+                coupon_warning = True
+            else:
+                coupon_discount = coupon_service.calculate_discount(coupon, base_total).quantize(
+                    CURRENCY_QUANT,
+                    rounding=ROUND_HALF_UP,
+                )
+                coupon_discount = min(coupon_discount, base_total)
+                if coupon_discount > Decimal("0"):
+                    coupon_meta = {
+                        "code": coupon.code,
+                        "discount": str(coupon_discount),
+                        "status": "pending",
+                    }
+                else:
+                    coupon_discount = Decimal("0")
+    if coupon_discount == Decimal("0") and coupon_discount_state > Decimal("0") and not coupon_warning:
+        coupon_discount = coupon_discount_state
+
+    total_after_coupon = max(Decimal("0"), base_total - coupon_discount)
+
     loyalty_points = int(data.get("loyalty_redeem_points") or 0)
     loyalty_value = Decimal(str(data.get("loyalty_redeem_value") or "0")).quantize(
         CURRENCY_QUANT,
         rounding=ROUND_HALF_UP,
     )
     ratio = Decimal(str(data.get("loyalty_ratio") or "0")) if loyalty_points else Decimal("0")
-    total_due = Decimal(str(data.get("loyalty_total_due") or totals.get("total", "0") or "0")).quantize(
+    total_due = Decimal(str(data.get("loyalty_total_due") or total_after_coupon)).quantize(
         CURRENCY_QUANT,
         rounding=ROUND_HALF_UP,
     )
@@ -223,19 +271,26 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
             loyalty_warning = True
             loyalty_points = 0
             loyalty_value = Decimal("0")
-            total_due = base_total
+            total_due = total_after_coupon
     if loyalty_points == 0 or loyalty_value <= Decimal("0"):
         loyalty_points = 0
         loyalty_value = Decimal("0")
-        total_due = base_total
+        total_due = total_after_coupon
     else:
-        total_due = max(Decimal("0"), min(total_due, base_total))
+        total_due = max(Decimal("0"), min(total_due, total_after_coupon))
         if ratio <= Decimal("0"):
             ratio = (loyalty_value / Decimal(loyalty_points)).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
 
+    totals["coupon_discount"] = str(coupon_discount)
     totals["loyalty_discount"] = str(loyalty_value)
     totals["total"] = str(total_due)
-    await state.update_data(cart_totals=totals)
+    await state.update_data(
+        cart_totals=totals,
+        coupon_discount_value=str(coupon_discount),
+        loyalty_redeem_points=loyalty_points,
+        loyalty_redeem_value=str(loyalty_value),
+        loyalty_total_due=str(total_due),
+    )
 
     loyalty_meta: dict[str, Any] | None = None
     if loyalty_points > 0 and loyalty_value > Decimal("0"):
@@ -249,13 +304,15 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
             }
         }
 
-    extra_attrs = {
+    extra_attrs: dict[str, Any] = {
         "cart_items": cart_queue,
         "cart_answers": answers,
         "cart_totals": totals,
     }
     if loyalty_meta:
         extra_attrs["loyalty"] = loyalty_meta
+    if coupon_meta:
+        extra_attrs["coupon"] = coupon_meta
 
     total_amount = total_due
 
@@ -298,6 +355,22 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
             order.extra_attrs = order.extra_attrs or {}
             order.extra_attrs["loyalty"] = loyalty_meta_reserved
 
+    if coupon_meta and coupon is not None and coupon_discount > Decimal("0"):
+        try:
+            await coupon_service.apply_coupon(
+                coupon,
+                user_id=profile.id,
+                order_id=order.id,
+                order_total=base_total,
+            )
+            coupon_meta["status"] = "reserved"
+        except ValueError:
+            coupon_warning = True
+            coupon_meta["status"] = "failed"
+        await OrderRepository(session).merge_extra_attrs(order, {"coupon": coupon_meta})
+        order.extra_attrs = order.extra_attrs or {}
+        order.extra_attrs["coupon"] = coupon_meta
+
     email = _extract_cart_email(answers)
     crypto_service = CryptoPaymentService(session)
     crypto_result = await crypto_service.create_invoice_for_order(
@@ -314,6 +387,14 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
     summary_text = _format_cart_summary(cart_queue, totals, currency, include_header=True)
     admin_summary = "; ".join(f"{item['name']} x{item['quantity']}" for item in cart_queue)
     admin_answers = [{"key": "Cart items", "prompt": "Cart items", "value": admin_summary}]
+    if coupon_discount > Decimal("0") and coupon_meta:
+        admin_answers.append(
+            {
+                "key": "Coupon discount",
+                "prompt": "Coupon discount",
+                "value": f"-{coupon_discount} {currency} ({coupon_meta.get('code')})",
+            }
+        )
     if loyalty_points > 0 and loyalty_value > Decimal("0"):
         admin_answers.append(
             {
@@ -350,6 +431,10 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
     if loyalty_warning:
         await callback.message.answer(
             "Loyalty points could not be applied because your available balance changed. No points were deducted."
+        )
+    if coupon_warning:
+        await callback.message.answer(
+            "Coupon could not be applied. It may be invalid, expired, or its usage limit has been reached."
         )
 
     await callback.answer("Order created")
@@ -428,6 +513,8 @@ def _format_cart_summary(
         lines.append(f"Tax: {totals.get('tax')} {currency}")
     if Decimal(totals.get("shipping", "0")) > 0:
         lines.append(f"Shipping: {totals.get('shipping')} {currency}")
+    if Decimal(totals.get("coupon_discount", "0")) > 0:
+        lines.append(f"Coupon discount: -{totals.get('coupon_discount')} {currency}")
     if Decimal(totals.get("loyalty_discount", "0")) > 0:
         lines.append(f"Loyalty discount: -{totals.get('loyalty_discount')} {currency}")
     lines.append(f"Total: {totals.get('total', '0')} {currency}")

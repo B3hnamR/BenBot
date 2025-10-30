@@ -37,7 +37,7 @@ from app.bot.keyboards.cart import cart_checkout_confirmation_keyboard
 from app.bot.states.order import OrderFlowState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus, ProductQuestionType
-from app.infrastructure.db.models import Order, Product
+from app.infrastructure.db.models import Coupon, Order, Product
 from app.infrastructure.db.repositories import OrderRepository, UserRepository
 from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
@@ -47,6 +47,7 @@ from app.services.crypto_payment_service import (
 )
 from app.services.category_service import CategoryService
 from app.services.loyalty_service import LoyaltyService
+from app.services.coupon_service import CouponService
 from app.services.loyalty_order_service import (
     ensure_points_available,
     reserve_loyalty_for_order,
@@ -119,6 +120,12 @@ async def initiate_product_order_flow(
         "loyalty_mode": None,
         "loyalty_user_profile_id": None,
         "loyalty_account_id": None,
+        "coupon_prompt_status": None,
+        "coupon_code": None,
+        "coupon_discount_value": None,
+        "coupon_id": None,
+        "coupon_mode": None,
+        "coupon_base_amount": None,
     }
 
     if origin != "direct" and cart_queue:
@@ -681,32 +688,18 @@ async def finalize_order(
             await callback.answer("Saved responses. Next item...")
             return
 
-        totals = data.get("cart_totals") or {}
-        currency = data.get("cart_currency") or product.currency
-        if callback.message:
-            await state.update_data(
-                cart_summary_message_chat=callback.message.chat.id,
-                cart_summary_message_id=callback.message.message_id,
-            )
-        prompted = await _maybe_prompt_loyalty(
+        status = await _continue_cart_flow_after_discounts(
             callback.message,
             state,
             session,
-            mode="cart",
+            bot=callback.bot,
         )
-        if prompted:
+        if status == "coupon":
+            await callback.answer("Enter a coupon code or /skip to continue.")
+            return
+        if status == "loyalty":
             await callback.answer("Choose how many loyalty points to redeem, then continue.")
             return
-
-        summary_text = _format_cart_summary_for_confirmation(cart_queue, totals, currency)
-        await state.set_state(OrderFlowState.cart_confirm)
-        await _render_cart_summary_from_state(
-            state,
-            callback.bot,
-            summary_text,
-            reply_markup=cart_checkout_confirmation_keyboard(),
-            fallback_chat_id=callback.message.chat.id if callback.message else callback.from_user.id,
-        )
         await callback.answer("Review your cart and confirm.")
         return
 
@@ -726,6 +719,43 @@ async def finalize_order(
         rounding=ROUND_HALF_UP,
     )
 
+    coupon_code = data.get("coupon_code")
+    coupon_discount_value = Decimal(str(data.get("coupon_discount_value") or "0")).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    coupon_meta: dict[str, Any] | None = None
+    coupon_warning = False
+    coupon: Coupon | None = None
+    coupon_service = CouponService(session)
+
+    coupon_discount = Decimal("0")
+    if coupon_code:
+        coupon = await coupon_service.get_coupon(coupon_code)
+        if coupon is None:
+            coupon_warning = True
+        else:
+            try:
+                await coupon_service.validate_coupon(coupon, user_id=profile.id, order_total=base_total)
+            except ValueError:
+                coupon_warning = True
+            else:
+                coupon_discount = coupon_service.calculate_discount(coupon, base_total).quantize(
+                    CURRENCY_QUANT,
+                    rounding=ROUND_HALF_UP,
+                )
+                coupon_discount = min(coupon_discount, base_total)
+                if coupon_discount > Decimal("0"):
+                    coupon_meta = {
+                        "code": coupon.code,
+                        "discount": str(coupon_discount),
+                        "status": "pending",
+                    }
+                else:
+                    coupon_discount = Decimal("0")
+
+    total_after_coupon = max(Decimal("0"), base_total - coupon_discount)
+
     loyalty_warning = False
     if loyalty_points > 0:
         can_redeem = await ensure_points_available(session, profile.id, points=loyalty_points)
@@ -733,13 +763,16 @@ async def finalize_order(
             loyalty_warning = True
             loyalty_points = 0
             loyalty_value = Decimal("0")
-            total_due = base_total
     if loyalty_points == 0 or loyalty_value <= Decimal("0"):
         loyalty_points = 0
         loyalty_value = Decimal("0")
-        total_due = base_total
+        total_due = total_after_coupon
     else:
-        total_due = max(Decimal("0"), min(total_due, base_total))
+        total_due = Decimal(str(data.get("loyalty_total_due") or total_after_coupon)).quantize(
+            CURRENCY_QUANT,
+            rounding=ROUND_HALF_UP,
+        )
+        total_due = max(Decimal("0"), min(total_due, total_after_coupon))
         if ratio <= Decimal("0"):
             ratio = (loyalty_value / Decimal(loyalty_points)).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
 
@@ -755,16 +788,20 @@ async def finalize_order(
             }
         }
 
+    extra_attrs: dict[str, Any] = {"quantity": quantity}
+    if loyalty_meta:
+        extra_attrs["loyalty"] = loyalty_meta
+    if coupon_meta:
+        extra_attrs["coupon"] = coupon_meta
+
     order_kwargs: dict[str, Any] = {
         "user_id": profile.id,
         "product": product,
         "answers": answer_pairs,
         "invoice_timeout_minutes": timeout_minutes,
-        "extra_attrs": {"quantity": quantity},
+        "extra_attrs": extra_attrs,
+        "total_override": total_due,
     }
-    if loyalty_meta:
-        order_kwargs["extra_attrs"]["loyalty"] = loyalty_meta
-    order_kwargs["total_override"] = total_due
 
     try:
         order = await order_service.create_order(**order_kwargs)
@@ -802,6 +839,22 @@ async def finalize_order(
             order.extra_attrs = order.extra_attrs or {}
             order.extra_attrs["loyalty"] = loyalty_meta_reserved
 
+    if coupon_meta and coupon is not None and coupon_discount > Decimal("0"):
+        try:
+            await coupon_service.apply_coupon(
+                coupon,
+                user_id=profile.id,
+                order_id=order.id,
+                order_total=base_total,
+            )
+            coupon_meta["status"] = "reserved"
+        except ValueError:
+            coupon_warning = True
+            coupon_meta["status"] = "failed"
+        await OrderRepository(session).merge_extra_attrs(order, {"coupon": coupon_meta})
+        order.extra_attrs = order.extra_attrs or {}
+        order.extra_attrs["coupon"] = coupon_meta
+
     crypto_service = CryptoPaymentService(session)
     crypto_result = await crypto_service.create_invoice_for_order(
         order,
@@ -814,6 +867,14 @@ async def finalize_order(
     display_answers = list(answers)
     if quantity > 1:
         display_answers.append({"key": "quantity", "prompt": "Quantity", "value": str(quantity)})
+    if coupon_discount > Decimal("0") and coupon_meta:
+        display_answers.append(
+            {
+                "key": "coupon_discount",
+                "prompt": "Coupon",
+                "value": f"-{coupon_discount} {order.currency} ({coupon_meta.get('code')})",
+            }
+        )
     if loyalty_points > 0 and loyalty_value > Decimal("0"):
         display_answers.append(
             {
@@ -832,6 +893,10 @@ async def finalize_order(
     if loyalty_warning:
         await callback.message.answer(
             "Loyalty points could not be applied because your available balance changed. No points were deducted."
+        )
+    if coupon_warning:
+        await callback.message.answer(
+            "Coupon could not be applied. It may be invalid, expired, or its usage limit has been reached."
         )
 
     await _notify_admins_of_order(callback, order, product_name, display_answers, crypto_result)
@@ -884,9 +949,18 @@ async def _show_order_confirmation(message: Message, state: FSMContext) -> None:
     except Exception:  # noqa: BLE001
         unit_price = Decimal("0.00")
     subtotal = (unit_price * quantity).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
-    discount = Decimal(str(data.get("loyalty_redeem_value") or "0")).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
-    discount = min(discount, subtotal)
-    total_due = (subtotal - discount).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+    coupon_discount = Decimal(str(data.get("coupon_discount_value") or "0")).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    coupon_discount = min(coupon_discount, subtotal)
+    subtotal_after_coupon = (subtotal - coupon_discount).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+    loyalty_discount = Decimal(str(data.get("loyalty_redeem_value") or "0")).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    loyalty_discount = min(loyalty_discount, subtotal_after_coupon)
+    total_due = (subtotal_after_coupon - loyalty_discount).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
     answers: List[dict[str, str | None]] = list(data.get("answers", []))
 
     lines = [
@@ -896,8 +970,10 @@ async def _show_order_confirmation(message: Message, state: FSMContext) -> None:
     if quantity > 1:
         lines.append(f"Quantity: {quantity}")
         lines.append(f"Subtotal: {subtotal} {currency}")
-    if discount > Decimal("0"):
-        lines.append(f"Loyalty discount: -{discount} {currency}")
+    if coupon_discount > Decimal("0"):
+        lines.append(f"Coupon discount: -{coupon_discount} {currency}")
+    if loyalty_discount > Decimal("0"):
+        lines.append(f"Loyalty discount: -{loyalty_discount} {currency}")
     lines.append(f"Total due: {total_due} {currency}")
     lines.append("")
     lines.append("<b>Order details</b>")
@@ -1006,6 +1082,31 @@ def _order_confirmation_message(
             lines.append(f"{item['prompt']}: {item.get('value') or '-'}")
     if expires_text:
         lines.append(expires_text)
+    coupon_meta = (order.extra_attrs or {}).get("coupon") if isinstance(order.extra_attrs, dict) else {}
+    if isinstance(coupon_meta, dict):
+        discount_raw = coupon_meta.get("discount")
+        try:
+            discount_value = Decimal(str(discount_raw))
+        except Exception:  # noqa: BLE001
+            discount_value = Decimal("0")
+        if discount_value > Decimal("0"):
+            lines.append("")
+            coupon_label = f"Coupon discount: -{discount_raw} {order.currency}"
+            if coupon_meta.get("code"):
+                coupon_label = f"{coupon_label} ({coupon_meta['code']})"
+            status_text = (coupon_meta.get("status") or "").lower()
+            if status_text in {"reserved", "pending"}:
+                coupon_label = f"{coupon_label} [reserved]"
+            elif status_text == "applied":
+                coupon_label = f"{coupon_label} [applied]"
+            elif status_text == "failed":
+                coupon_label = f"{coupon_label} [failed]"
+            elif status_text == "refunded":
+                coupon_label = f"{coupon_label} [refunded]"
+            lines.append(coupon_label)
+        elif (coupon_meta.get("status") or "").lower() == "failed":
+            lines.append("")
+            lines.append("Coupon discount could not be applied.")
     if crypto is not None:
         if crypto.error:
             lines.append("")
@@ -1081,13 +1182,9 @@ async def _begin_question_flow(
 
     origin = data.get("origin", "direct")
     if origin == "direct":
-        prompted = await _maybe_prompt_loyalty(
-            target_message,
-            state,
-            session,
-            mode="direct",
-        )
-        if prompted:
+        if await _maybe_prompt_coupon(target_message, state, session, mode="direct"):
+            return
+        if await _maybe_prompt_loyalty(target_message, state, session, mode="direct"):
             return
     await _show_order_confirmation(target_message, state)
     await state.set_state(OrderFlowState.confirm)
@@ -1135,6 +1232,31 @@ async def _notify_admins_of_order(
         lines.append("<b>Answers</b>")
         for item in answers:
             lines.append(f"{item['key']}: {item.get('value') or '-'}")
+    coupon_meta = (order.extra_attrs or {}).get("coupon") if isinstance(order.extra_attrs, dict) else {}
+    if isinstance(coupon_meta, dict):
+        discount_raw = coupon_meta.get("discount")
+        try:
+            discount_value = Decimal(str(discount_raw))
+        except Exception:  # noqa: BLE001
+            discount_value = Decimal("0")
+        if discount_value > Decimal("0"):
+            lines.append("")
+            coupon_line = f"Coupon discount: -{discount_raw} {order.currency}"
+            if coupon_meta.get("code"):
+                coupon_line = f"{coupon_line} ({coupon_meta['code']})"
+            status_text = (coupon_meta.get("status") or "").lower()
+            if status_text in {"reserved", "pending"}:
+                coupon_line = f"{coupon_line} [reserved]"
+            elif status_text == "applied":
+                coupon_line = f"{coupon_line} [applied]"
+            elif status_text == "failed":
+                coupon_line = f"{coupon_line} [failed]"
+            elif status_text == "refunded":
+                coupon_line = f"{coupon_line} [refunded]"
+            lines.append(coupon_line)
+        elif (coupon_meta.get("status") or "").lower() == "failed":
+            lines.append("")
+            lines.append("Coupon discount failed to apply.")
     if crypto is not None:
         lines.append("")
         lines.append("<b>Crypto payment</b>")
@@ -1181,12 +1303,18 @@ def _format_cart_summary_for_confirmation(items: list[dict], totals: dict[str, s
     lines.append("")
     subtotal = totals.get("subtotal", "0")
     discount = totals.get("discount", "0")
+    coupon_discount = totals.get("coupon_discount", "0")
+    loyalty_discount = totals.get("loyalty_discount", "0")
     tax = totals.get("tax", "0")
     shipping = totals.get("shipping", "0")
     total = totals.get("total", "0")
     lines.append(f"Subtotal: {subtotal} {currency}")
     if Decimal(discount or "0") > 0:
         lines.append(f"Discounts: -{discount} {currency}")
+    if Decimal(coupon_discount or "0") > 0:
+        lines.append(f"Coupon discount: -{coupon_discount} {currency}")
+    if Decimal(loyalty_discount or "0") > 0:
+        lines.append(f"Loyalty discount: -{loyalty_discount} {currency}")
     if Decimal(tax or "0") > 0:
         lines.append(f"Tax: {tax} {currency}")
     if Decimal(shipping or "0") > 0:
@@ -1239,16 +1367,156 @@ async def _complete_question_flow(
     data = await state.get_data()
     origin = data.get("origin", "direct")
     if origin == "direct":
-        prompted = await _maybe_prompt_loyalty(
-            message,
-            state,
-            session,
-            mode="direct",
-        )
-        if prompted:
+        if await _maybe_prompt_coupon(message, state, session, mode="direct"):
+            return
+        if await _maybe_prompt_loyalty(message, state, session, mode="direct"):
             return
     await _show_order_confirmation(message, state)
     await state.set_state(OrderFlowState.confirm)
+
+
+async def _maybe_prompt_coupon(
+    message: Message | None,
+    state: FSMContext,
+    session: AsyncSession,
+    *,
+    mode: str,
+) -> bool:
+    data = await state.get_data()
+    if data.get("coupon_prompt_status") == "pending":
+        return True
+    if data.get("coupon_prompt_status") == "complete" or data.get("coupon_code"):
+        return False
+
+    base_amount = _coupon_base_amount(data, mode)
+    if base_amount <= Decimal("0"):
+        await state.update_data(
+            coupon_prompt_status="complete",
+            coupon_base_amount=str(base_amount),
+        )
+        return False
+
+    await state.update_data(
+        coupon_prompt_status="pending",
+        coupon_mode=mode,
+        coupon_base_amount=str(base_amount),
+    )
+
+    if message is None:
+        return False
+
+    await state.set_state(OrderFlowState.coupon)
+    await message.answer(
+        "Enter a coupon code to apply or send /skip to continue without one. Send /cancel to abort."
+    )
+    return True
+
+
+def _coupon_base_amount(data: dict[str, Any], mode: str) -> Decimal:
+    if mode == "direct":
+        try:
+            price = Decimal(str(data.get("price") or "0"))
+        except Exception:  # noqa: BLE001
+            return Decimal("0")
+        quantity = max(1, int(data.get("quantity", 1) or 1))
+        return (price * quantity).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+    if mode == "cart":
+        totals_base = data.get("cart_totals_base") or {}
+        total_raw = totals_base.get("total") or totals_base.get("total_before_loyalty") or "0"
+        try:
+            return Decimal(str(total_raw)).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+        except Exception:  # noqa: BLE001
+            return Decimal("0")
+    return Decimal("0")
+
+
+async def _resume_after_coupon(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    data = await state.get_data()
+    origin = data.get("origin", "direct")
+    if origin == "direct":
+        quantity = max(1, int(data.get("quantity", 1) or 1))
+        await _begin_question_flow(message, state, session, quantity)
+        return
+
+    status = await _continue_cart_flow_after_discounts(
+        message,
+        state,
+        session,
+        bot=message.bot,
+    )
+    if status == "coupon":
+        await message.answer("Enter a coupon code to apply or send /skip to continue.")
+    elif status == "loyalty":
+        await message.answer("Choose how many loyalty points to redeem, then continue.")
+
+
+async def _continue_cart_flow_after_discounts(
+    message: Message | None,
+    state: FSMContext,
+    session: AsyncSession,
+    *,
+    bot,
+) -> str:
+    if message is not None:
+        await state.update_data(
+            cart_summary_message_chat=message.chat.id,
+            cart_summary_message_id=message.message_id,
+        )
+
+    if await _maybe_prompt_coupon(message, state, session, mode="cart"):
+        return "coupon"
+    if await _maybe_prompt_loyalty(message, state, session, mode="cart"):
+        return "loyalty"
+
+    data = await state.get_data()
+    cart_queue = data.get("cart_checkout_queue") or []
+    totals = _build_cart_summary_totals(data)
+    await state.update_data(cart_totals=totals)
+    currency = data.get("cart_currency") or get_settings().payment_currency
+    summary_text = _format_cart_summary_for_confirmation(cart_queue, totals, currency)
+    await state.set_state(OrderFlowState.cart_confirm)
+    fallback_chat_id = message.chat.id if message is not None else data.get("telegram_user_id")
+    if fallback_chat_id is not None:
+        await _render_cart_summary_from_state(
+            state,
+            bot,
+            summary_text,
+            reply_markup=cart_checkout_confirmation_keyboard(),
+            fallback_chat_id=fallback_chat_id,
+        )
+    return "done"
+
+
+def _build_cart_summary_totals(data: dict[str, Any]) -> dict[str, str]:
+    totals_base = data.get("cart_totals_base") or {}
+
+    def _to_decimal(value: Any) -> Decimal:
+        try:
+            return Decimal(str(value or "0")).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+        except Exception:  # noqa: BLE001
+            return Decimal("0")
+
+    subtotal = _to_decimal(totals_base.get("subtotal"))
+    base_discount = _to_decimal(totals_base.get("discount"))
+    tax = _to_decimal(totals_base.get("tax"))
+    shipping = _to_decimal(totals_base.get("shipping"))
+    total = _to_decimal(totals_base.get("total"))
+
+    coupon_discount = _to_decimal(data.get("coupon_discount_value"))
+    loyalty_discount = _to_decimal(data.get("loyalty_redeem_value"))
+
+    total_after_coupon = max(Decimal("0"), total - coupon_discount)
+    total_after_loyalty = max(Decimal("0"), total_after_coupon - loyalty_discount)
+
+    return {
+        "subtotal": str(subtotal),
+        "discount": str(base_discount),
+        "tax": str(tax),
+        "shipping": str(shipping),
+        "coupon_discount": str(coupon_discount),
+        "loyalty_discount": str(loyalty_discount),
+        "total": str(total_after_loyalty),
+    }
 
 
 async def _maybe_prompt_loyalty(
@@ -1302,6 +1570,11 @@ async def _maybe_prompt_loyalty(
             return False
         quantity = max(1, int(data.get("quantity", 1) or 1))
         base_amount = (price * quantity).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+        coupon_discount = Decimal(str(data.get("coupon_discount_value") or "0")).quantize(
+            CURRENCY_QUANT,
+            rounding=ROUND_HALF_UP,
+        )
+        base_amount = max(Decimal("0"), base_amount - coupon_discount)
         currency = data.get("currency") or get_settings().payment_currency
     elif mode == "cart":
         totals_base = data.get("cart_totals_base") or {}
@@ -1310,6 +1583,11 @@ async def _maybe_prompt_loyalty(
             base_amount = Decimal(str(total_raw)).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
         except Exception:  # noqa: BLE001
             return False
+        coupon_discount = Decimal(str(data.get("coupon_discount_value") or "0")).quantize(
+            CURRENCY_QUANT,
+            rounding=ROUND_HALF_UP,
+        )
+        base_amount = max(Decimal("0"), base_amount - coupon_discount)
         currency = data.get("cart_currency") or get_settings().payment_currency
     else:
         return False
@@ -1376,6 +1654,82 @@ def _format_loyalty_prompt_text(
     return "\n".join(lines)
 
 
+@router.message(OrderFlowState.coupon)
+async def collect_coupon_code(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel(text):
+        await _cancel_order_flow(message, state, "Order cancelled.")
+        return
+
+    data = await state.get_data()
+    origin = data.get("origin", "direct")
+    mode = data.get("coupon_mode") or ("cart" if origin != "direct" else "direct")
+    base_amount = _coupon_base_amount(data, mode)
+    currency = data.get("currency") or data.get("cart_currency") or get_settings().payment_currency
+
+    user_repo = UserRepository(session)
+    profile = await user_repo.get_by_telegram_id(message.from_user.id)
+    if profile is None:
+        await state.clear()
+        await message.answer("User profile not found. Please try again later.")
+        return
+
+    service = CouponService(session)
+
+    if text.lower() in {"", "/skip", "skip"}:
+        await state.update_data(
+            coupon_prompt_status="complete",
+            coupon_code=None,
+            coupon_discount_value="0",
+            coupon_id=None,
+        )
+        await message.answer("No coupon applied.")
+        await _resume_after_coupon(message, state, session)
+        return
+
+    if base_amount <= Decimal("0"):
+        await state.update_data(
+            coupon_prompt_status="complete",
+            coupon_code=None,
+            coupon_discount_value="0",
+            coupon_id=None,
+        )
+        await message.answer("Order total is zero; coupon not applied.")
+        await _resume_after_coupon(message, state, session)
+        return
+
+    code = text.upper()
+    coupon = await service.get_coupon(code)
+    if coupon is None:
+        await message.answer("Coupon not found. Try another code or send /skip.")
+        return
+
+    try:
+        await service.validate_coupon(coupon, user_id=profile.id, order_total=base_amount)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+
+    discount = service.calculate_discount(coupon, base_amount).quantize(
+        CURRENCY_QUANT,
+        rounding=ROUND_HALF_UP,
+    )
+    if discount <= Decimal("0"):
+        await message.answer("This coupon does not provide a discount for the current order.")
+        return
+    if discount > base_amount:
+        discount = base_amount
+
+    await state.update_data(
+        coupon_prompt_status="complete",
+        coupon_code=coupon.code,
+        coupon_discount_value=str(discount),
+        coupon_id=coupon.id,
+    )
+    await message.answer(f"Coupon applied: -{discount} {currency}.")
+    await _resume_after_coupon(message, state, session)
+
+
 @router.message(OrderFlowState.loyalty)
 async def collect_loyalty_choice(message: Message, state: FSMContext, session: AsyncSession) -> None:
     text = (message.text or "").strip()
@@ -1402,7 +1756,16 @@ async def collect_loyalty_choice(message: Message, state: FSMContext, session: A
             loyalty_total_due=str(base_amount),
         )
         if mode == "cart":
-            await _render_cart_summary_after_loyalty(message, state)
+            status = await _continue_cart_flow_after_discounts(
+                message,
+                state,
+                session,
+                bot=message.bot,
+            )
+            if status == "coupon":
+                await message.answer("Enter a coupon code or /skip to continue.")
+            elif status == "loyalty":
+                await message.answer("Choose how many loyalty points to redeem, then continue.")
         else:
             await _show_order_confirmation(message, state)
             await state.set_state(OrderFlowState.confirm)
@@ -1443,37 +1806,21 @@ async def collect_loyalty_choice(message: Message, state: FSMContext, session: A
     )
 
     if mode == "cart":
-        await _render_cart_summary_after_loyalty(message, state)
+        status = await _continue_cart_flow_after_discounts(
+            message,
+            state,
+            session,
+            bot=message.bot,
+        )
+        if status == "coupon":
+            await message.answer("Enter a coupon code or /skip to continue.")
+        elif status == "loyalty":
+            await message.answer("Choose how many loyalty points to redeem, then continue.")
     else:
         await _show_order_confirmation(message, state)
         await state.set_state(OrderFlowState.confirm)
 
 
-async def _render_cart_summary_after_loyalty(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    cart_queue = data.get("cart_checkout_queue") or []
-    totals_base = data.get("cart_totals_base") or {}
-    totals = dict(data.get("cart_totals") or {})
-    currency = data.get("cart_currency") or get_settings().payment_currency
-    redeem_value = Decimal(str(data.get("loyalty_redeem_value") or "0")).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
-    total_due = Decimal(str(data.get("loyalty_total_due") or totals_base.get("total", "0") or "0")).quantize(
-        CURRENCY_QUANT,
-        rounding=ROUND_HALF_UP,
-    )
-
-    totals["loyalty_discount"] = str(redeem_value)
-    totals["total"] = str(total_due)
-
-    await state.update_data(cart_totals=totals)
-    summary_text = _format_cart_summary_for_confirmation(cart_queue, totals, currency)
-    await state.set_state(OrderFlowState.cart_confirm)
-    await _render_cart_summary_from_state(
-        state,
-        message.bot,
-        summary_text,
-        reply_markup=cart_checkout_confirmation_keyboard(),
-        fallback_chat_id=message.chat.id,
-    )
 def _extract_email_from_answers(answers: list[dict[str, str | None]]) -> str | None:
     for item in answers:
         raw = (item.get("value") or "").strip()

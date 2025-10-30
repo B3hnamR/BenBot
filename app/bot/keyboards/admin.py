@@ -6,15 +6,16 @@ from typing import TYPE_CHECKING, Sequence
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.core.enums import OrderStatus
+from app.core.enums import CouponStatus, OrderStatus
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
-    from app.infrastructure.db.models import Order
+    from app.infrastructure.db.models import Coupon, Order
 
 
 class AdminMenuCallback(StrEnum):
+    MANAGE_COUPONS = "admin:manage_coupons"
     TOGGLE_SUBSCRIPTION = "admin:toggle_subscription"
     MANAGE_CHANNELS = "admin:manage_channels"
     MANAGE_CRYPTO = "admin:manage_crypto"
@@ -63,12 +64,20 @@ class AdminLoyaltyCallback(StrEnum):
     BACK = "admin:loyalty:back"
 
 
+class AdminCouponCallback(StrEnum):
+    CREATE = "admin:coupon:create"
+    REFRESH = "admin:coupon:refresh"
+    BACK = "admin:coupon:back"
+
+
 ADMIN_ORDER_VIEW_PREFIX = "admin:orders:view:"
 ADMIN_ORDER_MARK_FULFILLED_PREFIX = "admin:orders:mark_fulfilled:"
 ADMIN_ORDER_MARK_PAID_PREFIX = "admin:orders:mark_paid:"
 ADMIN_ORDER_RECEIPT_PREFIX = "admin:orders:receipt:"
 ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:ord:delv:"
 ADMIN_RECENT_ORDERS_PAGE_PREFIX = "admin:orders:recent_page:"
+ADMIN_COUPON_VIEW_PREFIX = "admin:coupon:view:"
+ADMIN_COUPON_TOGGLE_PREFIX = "admin:coupon:toggle:"
 
 
 def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
@@ -84,6 +93,7 @@ def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
     builder.button(text="Products", callback_data=AdminMenuCallback.MANAGE_PRODUCTS.value)
     builder.button(text="Users", callback_data=AdminMenuCallback.MANAGE_USERS.value)
     builder.button(text="Orders", callback_data=AdminMenuCallback.MANAGE_ORDERS.value)
+    builder.button(text="Coupons", callback_data=AdminMenuCallback.MANAGE_COUPONS.value)
     builder.button(text="Loyalty & rewards", callback_data=AdminMenuCallback.MANAGE_LOYALTY.value)
     builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
     builder.adjust(1)
@@ -212,6 +222,33 @@ def loyalty_settings_keyboard(config: "ConfigService.LoyaltySettings") -> Inline
         callback_data=AdminLoyaltyCallback.TOGGLE_AUTO_PROMPT.value,
     )
     builder.button(text="Back", callback_data=AdminLoyaltyCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def coupon_dashboard_keyboard(coupons: Sequence["Coupon"]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Create coupon", callback_data=AdminCouponCallback.CREATE.value)
+    for coupon in coupons:
+        status = coupon.status.value.replace("_", " ").title()
+        builder.button(
+            text=f"{coupon.code} ({status})",
+            callback_data=f"{ADMIN_COUPON_VIEW_PREFIX}{coupon.id}",
+        )
+    builder.button(text="Refresh list", callback_data=AdminCouponCallback.REFRESH.value)
+    builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def coupon_details_keyboard(coupon: "Coupon") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    toggle_text = "Deactivate" if coupon.status == CouponStatus.ACTIVE else "Activate"
+    builder.button(
+        text=toggle_text,
+        callback_data=f"{ADMIN_COUPON_TOGGLE_PREFIX}{coupon.id}",
+    )
+    builder.button(text="Back", callback_data=AdminCouponCallback.REFRESH.value)
     builder.adjust(1)
     return builder.as_markup()
 

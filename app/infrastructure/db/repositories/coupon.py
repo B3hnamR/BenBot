@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.enums import CouponStatus
@@ -23,6 +24,15 @@ class CouponRepository(BaseRepository):
         await self.add(coupon)
         return coupon
 
+    async def get_by_id(self, coupon_id: int) -> Coupon | None:
+        stmt = (
+            select(Coupon)
+            .options(selectinload(Coupon.redemptions))
+            .where(Coupon.id == coupon_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.unique().scalar_one_or_none()
+
     async def list_active(self, now: datetime | None = None) -> list[Coupon]:
         stmt = select(Coupon).where(Coupon.status == CouponStatus.ACTIVE)
         if now is not None:
@@ -33,13 +43,23 @@ class CouponRepository(BaseRepository):
         result = await self.session.execute(stmt)
         return list(result.scalars().unique().all())
 
+    async def list_recent(self, limit: int = 10) -> list[Coupon]:
+        stmt = (
+            select(Coupon)
+            .options(selectinload(Coupon.redemptions))
+            .order_by(Coupon.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().unique().all())
+
     async def add_redemption(
         self,
         coupon: Coupon,
         *,
         user_id: int,
         order_id: int | None,
-        amount_applied,
+        amount_applied: Decimal,
         meta: dict | None = None,
     ) -> CouponRedemption:
         redemption = CouponRedemption(
@@ -51,6 +71,21 @@ class CouponRepository(BaseRepository):
         )
         await self.add(redemption)
         return redemption
+
+    async def list_redemptions_for_order(self, order_id: int) -> list[CouponRedemption]:
+        stmt = (
+            select(CouponRedemption)
+            .options(selectinload(CouponRedemption.coupon))
+            .where(CouponRedemption.order_id == order_id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().unique().all())
+
+    async def delete_redemptions_for_order(self, order_id: int) -> int:
+        result = await self.session.execute(
+            delete(CouponRedemption).where(CouponRedemption.order_id == order_id)
+        )
+        return int(result.rowcount or 0)
 
     async def count_redemptions(self, coupon_id: int) -> int:
         result = await self.session.execute(

@@ -23,6 +23,9 @@ class CouponService:
     async def get_coupon(self, code: str) -> Coupon | None:
         return await self._repo.get_by_code(code)
 
+    def calculate_discount(self, coupon: Coupon, order_total: Decimal) -> Decimal:
+        return self._calculate_discount(coupon, order_total)
+
     async def validate_coupon(
         self,
         coupon: Coupon,
@@ -59,12 +62,16 @@ class CouponService:
         order_total: Decimal,
     ) -> Decimal:
         await self.validate_coupon(coupon, user_id=user_id, order_total=order_total)
-        discount = self._calculate_discount(coupon, order_total)
+        discount = self.calculate_discount(coupon, order_total)
         await self._repo.add_redemption(
             coupon,
             user_id=user_id,
             order_id=order_id,
             amount_applied=discount,
+            meta={
+                "status": "reserved",
+                "order_total": str(order_total),
+            },
         )
         await self._session.flush()
         return discount

@@ -46,6 +46,7 @@ from app.services.crypto_payment_service import (
     CryptoSyncResult,
     OXAPAY_EXTRA_KEY,
 )
+from app.services.coupon_order_service import release_coupon_for_order
 from app.services.loyalty_order_service import refund_loyalty_for_order
 
 router = Router(name="common")
@@ -314,6 +315,7 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession, st
 
     await order_service.mark_cancelled(order)
     await refund_loyalty_for_order(session, order, reason="user_cancelled")
+    await release_coupon_for_order(session, order, reason="user_cancelled")
     await OrderNotificationService(session).notify_cancelled(callback.bot, order, reason="user_cancelled")
     state_data = await state.get_data()
     page = int(state_data.get("user_orders_page", 0))

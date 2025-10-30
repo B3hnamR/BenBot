@@ -116,6 +116,8 @@ def _format_totals(
     lines: list[str] = []
     subtotal = totals.get("subtotal")
     discount = totals.get("discount")
+    coupon_discount = totals.get("coupon_discount")
+    loyalty_discount = totals.get("loyalty_discount")
     tax = totals.get("tax")
     shipping = totals.get("shipping")
     total = totals.get("total")
@@ -124,6 +126,10 @@ def _format_totals(
         lines.append(f"Subtotal: {subtotal} {currency}")
     if discount and _is_nonzero(discount):
         lines.append(f"Discounts: -{discount} {currency}")
+    if coupon_discount and _is_nonzero(coupon_discount):
+        lines.append(f"Coupon discount: -{coupon_discount} {currency}")
+    if loyalty_discount and _is_nonzero(loyalty_discount):
+        lines.append(f"Loyalty discount: -{loyalty_discount} {currency}")
     if tax and _is_nonzero(tax):
         lines.append(f"Tax: {tax} {currency}")
     if shipping and _is_nonzero(shipping):

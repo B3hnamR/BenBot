@@ -24,6 +24,7 @@ from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
 from app.services.order_fulfillment import ensure_fulfillment
+from app.services.coupon_order_service import release_coupon_for_order
 from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
 from app.services.loyalty_order_service import refund_loyalty_for_order
@@ -140,15 +141,18 @@ async def handle_admin_payments_sync(callback: CallbackQuery, session: AsyncSess
             elif order.status == OrderStatus.CANCELLED:
                 await notifications.notify_cancelled(callback.bot, order, reason="provider_update")
                 await refund_loyalty_for_order(session, order, reason="provider_update")
+                await release_coupon_for_order(session, order, reason="provider_update")
             elif order.status == OrderStatus.EXPIRED:
                 await notifications.notify_expired(callback.bot, order, reason="provider_update")
                 await refund_loyalty_for_order(session, order, reason="provider_update")
+                await release_coupon_for_order(session, order, reason="provider_update")
 
         prev_status = order.status
         await order_service.enforce_expiration(order)
         if order.status == OrderStatus.EXPIRED and prev_status != OrderStatus.EXPIRED:
             await notifications.notify_expired(callback.bot, order, reason="timeout_check")
             await refund_loyalty_for_order(session, order, reason="timeout_check")
+            await release_coupon_for_order(session, order, reason="timeout_check")
 
     notice_parts = [f"Sync complete. Checked {len(pending_orders)} invoice(s)."]
     if updated:
