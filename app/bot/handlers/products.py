@@ -1206,6 +1206,10 @@ async def _cancel_order_flow(message: Message, state: FSMContext, text: str) -> 
     await message.answer(text)
 
 
+def _is_cancel(text: str) -> bool:
+    return text.lower() in {"/cancel", "cancel"}
+
+
 async def _notify_admins_of_order(
     callback: CallbackQuery,
     order: Order,
