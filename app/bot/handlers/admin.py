@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -243,7 +243,7 @@ async def handle_admin_order_timeline_menu(
         session,
         public_id,
         notice="Timeline tools: choose a status or add an internal note.",
-        reply_markup_override=order_timeline_menu_keyboard(public_id),
+        reply_markup_override=order_timeline_menu_keyboard,
     )
     await callback.answer()
 
@@ -294,8 +294,10 @@ async def handle_admin_order_timeline_status(
             notice_text = "Order already cancelled."
             answer_text = "Order already cancelled."
     else:
+        label = OrderTimelineService.label_for_status(status_key)
         await timeline_service.add_event(order, status=status_key, actor=actor)
-        notice_text = f"{OrderTimelineService.label_for_status(status_key)} recorded on timeline."
+        notice_text = f"{label} recorded on timeline."
+        answer_text = f"{label} logged."
 
     if callback.message:
         await state.update_data(
@@ -309,7 +311,7 @@ async def handle_admin_order_timeline_status(
         session,
         public_id,
         notice=notice_text,
-        reply_markup_override=order_timeline_menu_keyboard(public_id),
+        reply_markup_override=order_timeline_menu_keyboard,
     )
     await callback.answer(answer_text)
 
@@ -338,7 +340,7 @@ async def handle_admin_order_timeline_note_prompt(
         session,
         public_id,
         notice="Send the note text to append it to the timeline. Use /cancel to abort.",
-        reply_markup_override=order_timeline_menu_keyboard(public_id),
+        reply_markup_override=order_timeline_menu_keyboard,
     )
     await callback.answer("Waiting for note text…")
 
@@ -366,7 +368,7 @@ async def handle_admin_order_timeline_note_input(
             session,
             public_id,
             notice="Timeline note entry cancelled.",
-            reply_markup_override=order_timeline_menu_keyboard(public_id),
+            reply_markup_override=order_timeline_menu_keyboard,
             bot=message.bot,
             chat_id=chat_id,
             message_id=target_message_id,
@@ -410,7 +412,7 @@ async def handle_admin_order_timeline_note_input(
         session,
         public_id,
         notice="Timeline note added.",
-        reply_markup_override=order_timeline_menu_keyboard(public_id),
+        reply_markup_override=order_timeline_menu_keyboard,
         bot=message.bot,
         chat_id=chat_id,
         message_id=target_message_id,
@@ -426,7 +428,7 @@ async def handle_admin_order_timeline_note_input(
 
 
 @router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_PAID_PREFIX))
-async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSession) -> None:
+async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
     public_id = callback.data.removeprefix(ADMIN_ORDER_MARK_PAID_PREFIX)
     order_service = OrderService(session)
     order = await order_service.get_order_by_public_id(public_id)
@@ -453,7 +455,35 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
     order.invoice_payload = None
     order.payment_provider = "manual"
     await ensure_fulfillment(session, callback.bot, order, source="admin_manual_paid")
-    await _render_admin_order_detail(callback.message, session, public_id, notice="Order marked as paid.")
+
+    state_data = await state.get_data()
+    using_timeline = state_data.get("timeline_public_id") == public_id
+    if using_timeline and callback.message:
+        await state.update_data(
+            timeline_public_id=public_id,
+            timeline_chat_id=callback.message.chat.id,
+            timeline_message_id=callback.message.message_id,
+        )
+    elif using_timeline:
+        await state.update_data(
+            timeline_public_id=None,
+            timeline_chat_id=None,
+            timeline_message_id=None,
+        )
+    else:
+        await state.update_data(
+            timeline_public_id=None,
+            timeline_chat_id=None,
+            timeline_message_id=None,
+        )
+
+    await _render_admin_order_detail(
+        callback.message,
+        session,
+        public_id,
+        notice="Order marked as paid.",
+        reply_markup_override=order_timeline_menu_keyboard if using_timeline else None,
+    )
     await callback.answer("Order marked as paid.")
 
 
@@ -483,7 +513,11 @@ async def handle_admin_order_mark_fulfilled(callback: CallbackQuery, session: As
 
 
 @router.callback_query(F.data.startswith(ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX))
-async def handle_admin_order_notify_delivered(callback: CallbackQuery, session: AsyncSession) -> None:
+async def handle_admin_order_notify_delivered(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
     public_id = callback.data.removeprefix(ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX)
     order_service = OrderService(session)
     order = await order_service.get_order_by_public_id(public_id)
@@ -539,8 +573,35 @@ async def handle_admin_order_notify_delivered(callback: CallbackQuery, session: 
         actor=f"admin:{callback.from_user.id}",
     )
 
+    state_data = await state.get_data()
+    using_timeline = state_data.get("timeline_public_id") == public_id
+    if using_timeline and callback.message:
+        await state.update_data(
+            timeline_public_id=public_id,
+            timeline_chat_id=callback.message.chat.id,
+            timeline_message_id=callback.message.message_id,
+        )
+    elif using_timeline:
+        await state.update_data(
+            timeline_public_id=None,
+            timeline_chat_id=None,
+            timeline_message_id=None,
+        )
+    else:
+        await state.update_data(
+            timeline_public_id=None,
+            timeline_chat_id=None,
+            timeline_message_id=None,
+        )
+
     notice = "Delivery notice sent to the customer."
-    await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
+    await _render_admin_order_detail(
+        callback.message,
+        session,
+        public_id,
+        notice=notice,
+        reply_markup_override=order_timeline_menu_keyboard if using_timeline else None,
+    )
     await callback.answer("Customer notified.")
 
 
@@ -1157,7 +1218,9 @@ async def _render_admin_order_detail(
     public_id: str,
     *,
     notice: str | None = None,
-    reply_markup_override: InlineKeyboardMarkup | None = None,
+    reply_markup_override: InlineKeyboardMarkup
+    | Callable[[Order], InlineKeyboardMarkup]
+    | None = None,
     bot=None,
     chat_id: int | None = None,
     message_id: int | None = None,
@@ -1189,7 +1252,10 @@ async def _render_admin_order_detail(
     text = _format_admin_order_detail(order, timeline)
     if notice:
         text = f"{notice}\n\n{text}"
-    markup = reply_markup_override or order_manage_keyboard(order)
+    if callable(reply_markup_override):
+        markup = reply_markup_override(order)
+    else:
+        markup = reply_markup_override or order_manage_keyboard(order)
     if message is not None:
         try:
             await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)

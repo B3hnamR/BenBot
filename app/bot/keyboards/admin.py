@@ -407,20 +407,10 @@ def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
         text="Update timeline",
         callback_data=f"{ADMIN_ORDER_TIMELINE_MENU_PREFIX}{order.public_id}",
     )
-    if order.status in {OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
-        builder.button(
-            text="Mark as paid",
-            callback_data=f"{ADMIN_ORDER_MARK_PAID_PREFIX}{order.public_id}",
-        )
     if order.status == OrderStatus.PAID and not _fulfillment_recorded(order):
         builder.button(
             text="Mark fulfilled",
             callback_data=f"{ADMIN_ORDER_MARK_FULFILLED_PREFIX}{order.public_id}",
-        )
-    if order.status == OrderStatus.PAID and not _delivery_notice_sent(order):
-        builder.button(
-            text="Notify delivered",
-            callback_data=f"{ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX}{order.public_id}",
         )
     if order.status == OrderStatus.PAID:
         builder.button(
@@ -448,8 +438,9 @@ def _delivery_notice_sent(order: "Order") -> bool:
     return isinstance(delivery, dict) and bool(delivery.get("sent_at"))
 
 
-def order_timeline_menu_keyboard(public_id: str) -> InlineKeyboardMarkup:
+def order_timeline_menu_keyboard(order: "Order") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    public_id = order.public_id
     builder.button(
         text="Processing",
         callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}processing:{public_id}",
@@ -470,14 +461,16 @@ def order_timeline_menu_keyboard(public_id: str) -> InlineKeyboardMarkup:
         text="Add note",
         callback_data=f"{ADMIN_ORDER_TIMELINE_NOTE_PREFIX}{public_id}",
     )
-    builder.button(
-        text="Mark as paid",
-        callback_data=f"{ADMIN_ORDER_MARK_PAID_PREFIX}{public_id}",
-    )
-    builder.button(
-        text="Notify delivered",
-        callback_data=f"{ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX}{public_id}",
-    )
+    if order.status in {OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
+        builder.button(
+            text="Mark as paid",
+            callback_data=f"{ADMIN_ORDER_MARK_PAID_PREFIX}{public_id}",
+        )
+    if order.status == OrderStatus.PAID and not _delivery_notice_sent(order):
+        builder.button(
+            text="Notify delivered",
+            callback_data=f"{ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX}{public_id}",
+        )
     builder.button(
         text="Back",
         callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{public_id}",
