@@ -106,7 +106,8 @@ async def handle_help_category(callback: CallbackQuery) -> None:
     if not _user_is_owner(callback.from_user.id):
         await callback.answer("Help is available to administrators only.", show_alert=True)
         return
-    cat_id = callback.data.split(":", 1)[1]
+    prefix = f"{HelpCallback.CATEGORY.value}:"
+    cat_id = callback.data[len(prefix):]
     content = ADMIN_HELP_CONTENT.get(cat_id)
     if content is None:
         await callback.answer("Unknown section.", show_alert=True)
@@ -126,7 +127,13 @@ async def handle_help_item(callback: CallbackQuery) -> None:
     if not _user_is_owner(callback.from_user.id):
         await callback.answer("Help is available to administrators only.", show_alert=True)
         return
-    _, cat_id, item_id = callback.data.split(":", 2)
+    prefix = f"{HelpCallback.ITEM.value}:"
+    payload = callback.data[len(prefix):]
+    try:
+        cat_id, item_id = payload.split(":", 1)
+    except ValueError:
+        await callback.answer("Unknown topic.", show_alert=True)
+        return
     content = ADMIN_HELP_CONTENT.get(cat_id)
     if content is None:
         await callback.answer("Unknown section.", show_alert=True)
