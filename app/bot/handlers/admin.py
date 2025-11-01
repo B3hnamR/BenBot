@@ -60,6 +60,10 @@ LEGACY_ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "admin:orders:timeline_status:"
 LEGACY_ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "admin:orders:timeline_note:"
 
 
+def _timeline_keyboard(order: Order, timeline: Sequence[OrderTimeline] | None) -> InlineKeyboardMarkup:
+    return order_timeline_menu_keyboard(order, timeline=timeline)
+
+
 @router.callback_query(F.data == MainMenuCallback.ADMIN.value)
 async def handle_admin_menu(callback: CallbackQuery, session: AsyncSession) -> None:
     config_service = ConfigService(session)
@@ -243,10 +247,7 @@ async def handle_admin_order_timeline_menu(
         session,
         public_id,
         notice="Timeline tools: choose a status or add an internal note.",
-        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
-            current_order,
-            timeline=current_timeline,
-        ),
+        reply_markup_override=_timeline_keyboard,
     )
     await callback.answer()
 
@@ -314,10 +315,7 @@ async def handle_admin_order_timeline_status(
         session,
         public_id,
         notice=notice_text,
-        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
-            current_order,
-            timeline=current_timeline,
-        ),
+        reply_markup_override=_timeline_keyboard,
     )
     await callback.answer(answer_text)
 
@@ -346,10 +344,7 @@ async def handle_admin_order_timeline_note_prompt(
         session,
         public_id,
         notice="Send the note text to append it to the timeline. Use /cancel to abort.",
-        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
-            current_order,
-            timeline=current_timeline,
-        ),
+        reply_markup_override=_timeline_keyboard,
     )
     await callback.answer("Waiting for note text…")
 
@@ -377,10 +372,7 @@ async def handle_admin_order_timeline_note_input(
             session,
             public_id,
             notice="Timeline note entry cancelled.",
-            reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
-                current_order,
-                timeline=current_timeline,
-            ),
+            reply_markup_override=_timeline_keyboard,
             bot=message.bot,
             chat_id=chat_id,
             message_id=target_message_id,
@@ -424,10 +416,7 @@ async def handle_admin_order_timeline_note_input(
         session,
         public_id,
         notice="Timeline note added.",
-        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
-            current_order,
-            timeline=current_timeline,
-        ),
+        reply_markup_override=_timeline_keyboard,
         bot=message.bot,
         chat_id=chat_id,
         message_id=target_message_id,
@@ -497,14 +486,7 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         session,
         public_id,
         notice="Order marked as paid.",
-        reply_markup_override=(
-            (lambda current_order, current_timeline: order_timeline_menu_keyboard(
-                current_order,
-                timeline=current_timeline,
-            ))
-            if using_timeline
-            else None
-        ),
+        reply_markup_override=_timeline_keyboard if using_timeline else None,
     )
     await callback.answer("Order marked as paid.")
 
@@ -622,14 +604,7 @@ async def handle_admin_order_notify_delivered(
         session,
         public_id,
         notice=notice,
-        reply_markup_override=(
-            (lambda current_order, current_timeline: order_timeline_menu_keyboard(
-                current_order,
-                timeline=current_timeline,
-            ))
-            if using_timeline
-            else None
-        ),
+        reply_markup_override=_timeline_keyboard if using_timeline else None,
     )
     await callback.answer("Customer notified.")
 
