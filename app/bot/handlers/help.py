@@ -19,47 +19,71 @@ ADMIN_HELP_CONTENT = {
     "coupons": {
         "title": "Coupons",
         "items": {
-            "overview": (
-                "Overview",
-                "The Coupons dashboard (Admin → Coupons) lists recent codes, their status, and quick actions to activate, deactivate, or delete.",
+            "dashboard": (
+                "Dashboard overview",
+                "Admin → Coupons lists the 10 most recent codes with their status (Active, Inactive, Expired). Buttons on this screen: • Create coupon opens the guided wizard. • Tapping a coupon row opens its detail view. • Refresh list reloads the snapshot. • Back returns to the admin menu.",
             ),
-            "editing": (
-                "Editing fields",
-                "Use Edit fields to change name, description, type, amount/percentage, minimum order, caps, usage limits, and validity window without leaving the current message.",
+            "create_flow": (
+                "Create coupon wizard",
+                "After pressing Create coupon the bot asks for: code → optional name → type (fixed, percent, shipping) → value → optional minimum order → optional total redemption limit → optional per-user limit. Every step supports /skip (where allowed) and /cancel. When finished the coupon is immediately active and appears in the list.",
             ),
-            "usage": (
+            "detail_buttons": (
+                "Detail view actions",
+                "Inside a coupon detail you see code, status, value, limits, schedule, usage counts, and the following actions: • Deactivate/Activate toggles availability. • Auto-apply toggles whether the coupon is applied automatically during checkout if conditions match. • Edit fields opens the field selector (name, description, type, value, min order, max discount, limits, start/end date). • Usage stats shows aggregate usage and recent redemptions. • Delete coupon removes the code and all redemption history (confirmation required).",
+            ),
+            "edit_fields": (
+                "Edit fields menu",
+                "When Edit fields is chosen you get buttons for each attribute. Selecting one prompts for a new value. /clear removes optional fields, /cancel backs out. Type changes immediately request a new value to keep the coupon consistent.",
+            ),
+            "usage_stats": (
                 "Usage analytics",
-                "Usage stats shows the total redemptions, unique customers, and the most recent uses so you can diagnose failed or exhausted coupons.",
+                "Usage stats displays total redemptions, unique customers, remaining quota, and a list of the latest redemptions including order references. Use Refresh usage to update the numbers after new orders.",
             ),
         },
     },
     "loyalty": {
         "title": "Loyalty",
         "items": {
-            "settings": (
-                "Configuration",
-                "Admin → Loyalty lets you switch the program on/off, adjust earn rate, redeem ratio, minimum redeem points, and toggles for auto-earn/prompt.",
+            "main_settings": (
+                "Main settings screen",
+                "Admin → Loyalty shows current earn ratio, redeem ratio, minimum redeem points, and toggle states. Buttons: • Enable/Disable program • Auto-earn toggle (award points on paid orders) • Prompt toggle (ask customers to redeem during checkout) • Set earn rate • Set redeem ratio • Set minimum redeem. Each input expects a numeric value and accepts /cancel.",
             ),
-            "reservation": (
-                "Reservations",
-                "When a customer redeems points the balance is reserved. If the order fails or is cancelled, the reservation automatically rolls back so balances stay accurate.",
+            "earn_flow": (
+                "Earning points",
+                "When Auto-earn is ON every paid order multiplies the total by the earn rate and credits the customer. Rewards are recorded in loyalty transactions and reflected in the profile screen.",
+            ),
+            "redeem_flow": (
+                "Redeeming during checkout",
+                "If auto prompt is enabled and a customer has enough points, checkout shows instructions: they can type a number or 'max'. The bot reserves the points, subtracts the discount from the order, and annotates the order summary. If the order is cancelled or expires the reservation is released automatically.",
+            ),
+            "manual_adjustments": (
+                "Manual adjustments",
+                "Administrators can trigger refunds or adjustments from order detail flows (e.g., Admin → Orders). Loyalty transactions record status changes (reserved, applied, refunded) so you can audit history.",
             ),
         },
     },
     "referrals": {
         "title": "Referrals",
         "items": {
-            "settings": (
+            "program_settings": (
                 "Program settings",
-                "In Admin → Referrals you can enable the program, choose default reward type (bonus points or commission), configure default reward value, auto-reward, and approved reseller IDs.",
+                "Admin → Referrals dashboard summarises clicks/sign-ups/orders plus key toggles: • Program ON/OFF • Auto reward (immediate bonus credit) • Public links (allow all users to create links) • Default reward type/value • Manage reseller IDs. Each toggle updates instantly and the summary refreshes in place.",
             ),
-            "links": (
-                "Managing links",
-                "The Links view shows recent partner links. You can inspect statistics, tweak reward values, or delete links. Pending commissions can be reviewed and marked as paid.",
+            "links_view": (
+                "Links view",
+                "Selecting Recent links lists partner links with stats. Clicking a link shows: owner ID, code, clicks, sign-ups, orders, and actions: View rewards (list payouts), Adjust reward (change current value), Delete link. Deleting asks for confirmation before removing the link and history.",
+            ),
+            "pending_commissions": (
+                "Pending commissions",
+                "The Pending commissions page lists commission rewards (reward type = commission) that are waiting for manual payout. Each entry shows link code, order reference, and amount with a Mark paid button. Once marked paid the reward gains a timestamp and disappears from the pending list.",
+            ),
+            "user_portal": (
+                "User referral center",
+                "When the program is enabled, users can open Referral center from the main menu to create links (if allowed), copy share URLs, review click/sign-up/order totals, and see reward history. Bonus rewards are credited instantly; commissions stay pending until you confirm them from the admin panel.",
             ),
             "workflow": (
                 "Order workflow",
-                "When an order is paid the referral metadata is attached automatically. Bonus rewards are applied instantly; commission rewards stay pending until you mark them paid from the admin panel.",
+                "If a customer arrives via a referral link, the system records the click, enrollment, and attaches metadata to every order they place. Paid orders apply the configured reward automatically; cancelled or expired orders flag the referral as cancelled so rewards are not double-counted.",
             ),
         },
     },
