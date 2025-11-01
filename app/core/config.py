@@ -88,6 +88,36 @@ class Settings(BaseSettings):
         alias="LOYALTY_AUTO_PROMPT_DEFAULT",
         description="Prompt users to redeem points during checkout when available.",
     )
+    referral_enabled_default: bool = Field(
+        False,
+        alias="REFERRAL_ENABLED_DEFAULT",
+        description="Whether the referral program is enabled by default.",
+    )
+    referral_reward_type_default: str = Field(
+        "bonus",
+        alias="REFERRAL_REWARD_TYPE_DEFAULT",
+        description="Default reward type for new referral links (bonus or commission).",
+    )
+    referral_reward_value_default: float = Field(
+        5.0,
+        alias="REFERRAL_REWARD_VALUE_DEFAULT",
+        description="Default reward value (points for bonus, percent for commission).",
+    )
+    referral_auto_reward_default: bool = Field(
+        True,
+        alias="REFERRAL_AUTO_REWARD_DEFAULT",
+        description="Automatically reward referrers when referred orders are marked paid.",
+    )
+    referral_allow_public_default: bool = Field(
+        True,
+        alias="REFERRAL_ALLOW_PUBLIC_DEFAULT",
+        description="Allow all users to create referral links by default.",
+    )
+    referral_reseller_ids_default: List[int] = Field(
+        default_factory=list,
+        alias="REFERRAL_RESELLER_IDS_DEFAULT",
+        description="Comma separated list of Telegram user IDs with reseller privileges.",
+    )
 
     payment_provider_token: str | None = Field(
         None,
@@ -202,6 +232,26 @@ class Settings(BaseSettings):
         if not value:
             return []
         return [item.strip().upper() for item in str(value).split(",") if item.strip()]
+
+    @field_validator("referral_reseller_ids_default", mode="before")
+    @classmethod
+    def split_referral_resellers(cls, value: str | List[int]) -> List[int]:
+        if isinstance(value, list):
+            return value
+        if not value:
+            return []
+        items = [item.strip() for item in str(value).split(",") if item.strip()]
+        return [int(item) for item in items]
+
+    @field_validator("referral_reward_type_default", mode="before")
+    @classmethod
+    def normalize_referral_reward_type(cls, value: str) -> str:
+        if not value:
+            return "bonus"
+        lowered = str(value).strip().lower()
+        if lowered not in {"bonus", "commission"}:
+            return "bonus"
+        return lowered
 
     @field_validator("oxapay_fee_payer")
     @classmethod

@@ -1,12 +1,13 @@
 ﻿from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.enums import SettingKey
+from app.core.enums import ReferralRewardType, SettingKey
 from app.infrastructure.db.models import RequiredChannel
 from app.infrastructure.db.repositories import (
     RequiredChannelRepository,
@@ -50,6 +51,15 @@ class ConfigService:
         min_redeem_points: int
         auto_earn: bool
         auto_prompt: bool
+
+    @dataclass
+    class ReferralSettings:
+        enabled: bool
+        allow_public_links: bool
+        default_reward_type: ReferralRewardType
+        default_reward_value: Decimal
+        auto_reward: bool
+        reseller_user_ids: list[int]
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -277,6 +287,48 @@ class ConfigService:
                 self._env_settings.loyalty_auto_prompt_default,
             ),
         )
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_ENABLED,
+            await self._ensure_bool_default(
+                SettingKey.REFERRAL_ENABLED,
+                self._env_settings.referral_enabled_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_DEFAULT_REWARD_TYPE,
+            await self._ensure_value_default(
+                SettingKey.REFERRAL_DEFAULT_REWARD_TYPE,
+                self._env_settings.referral_reward_type_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_DEFAULT_REWARD_VALUE,
+            await self._ensure_value_default(
+                SettingKey.REFERRAL_DEFAULT_REWARD_VALUE,
+                self._env_settings.referral_reward_value_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_AUTO_REWARD,
+            await self._ensure_bool_default(
+                SettingKey.REFERRAL_AUTO_REWARD,
+                self._env_settings.referral_auto_reward_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_ALLOW_PUBLIC_LINKS,
+            await self._ensure_bool_default(
+                SettingKey.REFERRAL_ALLOW_PUBLIC_LINKS,
+                self._env_settings.referral_allow_public_default,
+            ),
+        )
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_RESELLERS,
+            await self._ensure_int_list_default(
+                SettingKey.REFERRAL_RESELLERS,
+                self._env_settings.referral_reseller_ids_default,
+            ),
+        )
 
         if self._env_settings.required_channels_default:
             existing = await self._channel_repo.list_active()
@@ -314,6 +366,28 @@ class ConfigService:
         if isinstance(value, str):
             return [item.strip().upper() for item in value.split(",") if item.strip()]
         return [item.upper() for item in default]
+
+    async def _ensure_int_list_default(
+        self,
+        key: SettingKey,
+        default: Sequence[int],
+    ) -> list[int]:
+        value = await self._settings_repo.get_value(key)
+        if value is None:
+            return list(default)
+        items: list[int] = []
+        if isinstance(value, list):
+            source = value
+        elif isinstance(value, str):
+            source = [item.strip() for item in value.split(",")]
+        else:
+            source = default
+        for item in source:
+            try:
+                items.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return items
 
     async def _ensure_channels_default(self) -> list[str]:
         value = await self._settings_repo.get_value(SettingKey.SUBSCRIPTION_CHANNELS)
@@ -652,6 +726,94 @@ class ConfigService:
         await self._settings_repo.upsert(SettingKey.LOYALTY_AUTO_EARN, bool(config.auto_earn))
         await self._settings_repo.upsert(SettingKey.LOYALTY_AUTO_PROMPT, bool(config.auto_prompt))
         return await self.get_loyalty_settings()
+
+    async def get_referral_settings(self) -> "ConfigService.ReferralSettings":
+        enabled = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.REFERRAL_ENABLED,
+                default=self._env_settings.referral_enabled_default,
+            ),
+            self._env_settings.referral_enabled_default,
+        )
+        allow_public = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.REFERRAL_ALLOW_PUBLIC_LINKS,
+                default=self._env_settings.referral_allow_public_default,
+            ),
+            self._env_settings.referral_allow_public_default,
+        )
+        reward_type_raw = await self._settings_repo.get_value(
+            SettingKey.REFERRAL_DEFAULT_REWARD_TYPE,
+            default=self._env_settings.referral_reward_type_default,
+        )
+        try:
+            reward_type = ReferralRewardType(str(reward_type_raw).strip().lower())
+        except Exception:  # noqa: BLE001
+            reward_type = ReferralRewardType(self._env_settings.referral_reward_type_default)
+        reward_value_raw = await self._settings_repo.get_value(
+            SettingKey.REFERRAL_DEFAULT_REWARD_VALUE,
+            default=self._env_settings.referral_reward_value_default,
+        )
+        try:
+            reward_value = Decimal(str(reward_value_raw))
+        except Exception:  # noqa: BLE001
+            reward_value = Decimal(str(self._env_settings.referral_reward_value_default))
+        auto_reward = self._to_bool(
+            await self._settings_repo.get_value(
+                SettingKey.REFERRAL_AUTO_REWARD,
+                default=self._env_settings.referral_auto_reward_default,
+            ),
+            self._env_settings.referral_auto_reward_default,
+        )
+        resellers_raw = await self._settings_repo.get_value(
+            SettingKey.REFERRAL_RESELLERS,
+            default=self._env_settings.referral_reseller_ids_default,
+        )
+        reseller_ids: set[int] = set()
+        if isinstance(resellers_raw, list):
+            for item in resellers_raw:
+                try:
+                    reseller_ids.add(int(item))
+                except (TypeError, ValueError):
+                    continue
+        elif isinstance(resellers_raw, str):
+            for item in resellers_raw.split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                try:
+                    reseller_ids.add(int(item))
+                except ValueError:
+                    continue
+        else:
+            reseller_ids.update(self._env_settings.referral_reseller_ids_default)
+
+        return self.ReferralSettings(
+            enabled=enabled,
+            allow_public_links=allow_public,
+            default_reward_type=reward_type,
+            default_reward_value=reward_value,
+            auto_reward=auto_reward,
+            reseller_user_ids=sorted(reseller_ids),
+        )
+
+    async def save_referral_settings(
+        self,
+        config: "ConfigService.ReferralSettings",
+    ) -> "ConfigService.ReferralSettings":
+        await self._settings_repo.upsert(SettingKey.REFERRAL_ENABLED, bool(config.enabled))
+        await self._settings_repo.upsert(SettingKey.REFERRAL_ALLOW_PUBLIC_LINKS, bool(config.allow_public_links))
+        await self._settings_repo.upsert(SettingKey.REFERRAL_DEFAULT_REWARD_TYPE, config.default_reward_type.value)
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_DEFAULT_REWARD_VALUE,
+            float(config.default_reward_value),
+        )
+        await self._settings_repo.upsert(SettingKey.REFERRAL_AUTO_REWARD, bool(config.auto_reward))
+        await self._settings_repo.upsert(
+            SettingKey.REFERRAL_RESELLERS,
+            [int(user_id) for user_id in config.reseller_user_ids],
+        )
+        return await self.get_referral_settings()
 
     @staticmethod
     def _safe_int(value: int | str | None, default: int) -> int:

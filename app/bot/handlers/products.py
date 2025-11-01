@@ -55,6 +55,7 @@ from app.services.loyalty_order_service import (
 from app.services.order_service import OrderCreationError, OrderService
 from app.services.product_service import ProductService
 from app.services.recommendation_service import RecommendationService
+from app.services.referral_order_service import attach_referral_to_order
 
 
 router = Router(name="products")
@@ -809,6 +810,8 @@ async def finalize_order(
         await state.clear()
         await callback.answer(str(exc), show_alert=True)
         return
+
+    await attach_referral_to_order(session, order, user_id=profile.id)
 
     loyalty_meta_reserved = loyalty_meta
     if loyalty_points > 0 and loyalty_value > Decimal("0"):

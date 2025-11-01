@@ -25,6 +25,7 @@ class AdminMenuCallback(StrEnum):
     MANAGE_USERS = "admin:manage_users"
     MANAGE_ORDERS = "admin:manage_orders"
     MANAGE_LOYALTY = "admin:manage_loyalty"
+    MANAGE_REFERRALS = "admin:manage_referrals"
     BACK_TO_MAIN = "admin:back_to_main"
 
 
@@ -102,6 +103,7 @@ def admin_menu_keyboard(subscription_enabled: bool) -> InlineKeyboardMarkup:
     builder.button(text="Orders", callback_data=AdminMenuCallback.MANAGE_ORDERS.value)
     builder.button(text="Coupons", callback_data=AdminMenuCallback.MANAGE_COUPONS.value)
     builder.button(text="Loyalty & rewards", callback_data=AdminMenuCallback.MANAGE_LOYALTY.value)
+    builder.button(text="Referrals", callback_data=AdminMenuCallback.MANAGE_REFERRALS.value)
     builder.button(text="Back", callback_data=AdminMenuCallback.BACK_TO_MAIN.value)
     builder.adjust(1)
     return builder.as_markup()

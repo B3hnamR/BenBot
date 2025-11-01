@@ -24,7 +24,7 @@ class UserContextMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         repo = UserRepository(session)
-        profile = await repo.upsert_from_telegram(
+        profile, created = await repo.upsert_from_telegram(
             telegram_id=user.id,
             username=user.username,
             first_name=user.first_name,
@@ -34,6 +34,7 @@ class UserContextMiddleware(BaseMiddleware):
         )
 
         data["user_profile"] = profile
+        data["user_profile_created"] = created
 
         if profile.is_blocked:
             if isinstance(event, CallbackQuery):

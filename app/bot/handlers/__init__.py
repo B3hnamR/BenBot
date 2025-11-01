@@ -1,6 +1,19 @@
 from aiogram import Dispatcher
 
-from . import admin, admin_coupons, admin_payments, admin_products, admin_support, admin_users, cart, common, products, support
+from . import (
+    admin,
+    admin_coupons,
+    admin_payments,
+    admin_products,
+    admin_referral,
+    admin_support,
+    admin_users,
+    cart,
+    common,
+    products,
+    referral,
+    support,
+)
 from ..middlewares import OwnerAccessMiddleware
 
 
@@ -17,14 +30,18 @@ def register_handlers(dispatcher: Dispatcher, owner_middleware: OwnerAccessMiddl
     admin_products.router.callback_query.outer_middleware(owner_middleware)
     admin_users.router.message.outer_middleware(owner_middleware)
     admin_users.router.callback_query.outer_middleware(owner_middleware)
+    admin_referral.router.message.outer_middleware(owner_middleware)
+    admin_referral.router.callback_query.outer_middleware(owner_middleware)
 
     dispatcher.include_router(support.router)
     dispatcher.include_router(common.router)
     dispatcher.include_router(cart.router)
     dispatcher.include_router(products.router)
+    dispatcher.include_router(referral.router)
     dispatcher.include_router(admin_payments.router)
     dispatcher.include_router(admin_coupons.router)
     dispatcher.include_router(admin_support.router)
     dispatcher.include_router(admin_products.router)
     dispatcher.include_router(admin_users.router)
+    dispatcher.include_router(admin_referral.router)
     dispatcher.include_router(admin.router)

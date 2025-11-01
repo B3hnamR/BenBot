@@ -39,6 +39,7 @@ from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
 from app.services.order_fulfillment import ensure_fulfillment
 from app.services.coupon_order_service import release_coupon_for_order
+from app.services.referral_order_service import cancel_referral_for_order
 from app.services.order_notification_service import OrderNotificationService
 from app.services.loyalty_order_service import refund_loyalty_for_order
 from app.services.order_service import OrderService
@@ -474,10 +475,12 @@ async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSess
                 await notifications.notify_cancelled(callback.bot, order, reason="provider_update")
                 await refund_loyalty_for_order(session, order, reason="provider_update")
                 await release_coupon_for_order(session, order, reason="provider_update")
+                await cancel_referral_for_order(session, order, reason="provider_update")
             elif order.status == OrderStatus.EXPIRED:
                 await notifications.notify_expired(callback.bot, order, reason="provider_update")
                 await refund_loyalty_for_order(session, order, reason="provider_update")
                 await release_coupon_for_order(session, order, reason="provider_update")
+                await cancel_referral_for_order(session, order, reason="provider_update")
         if order.status == OrderStatus.PAID:
             await ensure_fulfillment(session, callback.bot, order, source="admin_sync")
             continue
@@ -492,6 +495,7 @@ async def handle_crypto_sync_pending(callback: CallbackQuery, session: AsyncSess
             await notifications.notify_expired(callback.bot, order, reason="admin_sync_timeout")
             await refund_loyalty_for_order(session, order, reason="admin_sync_timeout")
             await release_coupon_for_order(session, order, reason="admin_sync_timeout")
+            await cancel_referral_for_order(session, order, reason="admin_sync_timeout")
 
     notice = f"Synced {len(orders)} invoice(s). Updated: {updated}."
     await _render_crypto_settings_message(callback.message, session, state, notice=notice)

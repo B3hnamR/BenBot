@@ -28,6 +28,7 @@ from app.services.coupon_order_service import release_coupon_for_order
 from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
 from app.services.loyalty_order_service import refund_loyalty_for_order
+from app.services.referral_order_service import cancel_referral_for_order
 
 router = Router(name="admin_payments")
 
@@ -142,10 +143,12 @@ async def handle_admin_payments_sync(callback: CallbackQuery, session: AsyncSess
                 await notifications.notify_cancelled(callback.bot, order, reason="provider_update")
                 await refund_loyalty_for_order(session, order, reason="provider_update")
                 await release_coupon_for_order(session, order, reason="provider_update")
+                await cancel_referral_for_order(session, order, reason="provider_update")
             elif order.status == OrderStatus.EXPIRED:
                 await notifications.notify_expired(callback.bot, order, reason="provider_update")
                 await refund_loyalty_for_order(session, order, reason="provider_update")
                 await release_coupon_for_order(session, order, reason="provider_update")
+                await cancel_referral_for_order(session, order, reason="provider_update")
 
         prev_status = order.status
         await order_service.enforce_expiration(order)
@@ -153,6 +156,7 @@ async def handle_admin_payments_sync(callback: CallbackQuery, session: AsyncSess
             await notifications.notify_expired(callback.bot, order, reason="timeout_check")
             await refund_loyalty_for_order(session, order, reason="timeout_check")
             await release_coupon_for_order(session, order, reason="timeout_check")
+            await cancel_referral_for_order(session, order, reason="timeout_check")
 
     notice_parts = [f"Sync complete. Checked {len(pending_orders)} invoice(s)."]
     if updated:

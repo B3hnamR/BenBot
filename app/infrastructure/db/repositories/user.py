@@ -24,8 +24,9 @@ class UserRepository(BaseRepository):
         last_name: str | None,
         language_code: str | None,
         last_seen_at: datetime | None,
-    ) -> UserProfile:
+    ) -> tuple[UserProfile, bool]:
         profile = await self.get_by_telegram_id(telegram_id)
+        created = False
         if profile is None:
             profile = UserProfile(
                 telegram_id=telegram_id,
@@ -36,13 +37,14 @@ class UserRepository(BaseRepository):
                 last_seen_at=last_seen_at,
             )
             await self.add(profile)
+            created = True
         else:
             profile.username = username
             profile.first_name = first_name
             profile.last_name = last_name
             profile.language_code = language_code
             profile.last_seen_at = last_seen_at
-        return profile
+        return profile, created
 
     async def list_recent(self, limit: int = 20) -> list[UserProfile]:
         users, _ = await self.paginate_recent(limit=limit, offset=0)

@@ -32,6 +32,7 @@ from app.services.loyalty_order_service import (
     reserve_loyalty_for_order,
 )
 from app.services.crypto_payment_service import CryptoPaymentService
+from app.services.referral_order_service import attach_referral_to_order
 from app.bot.states.order import OrderFlowState
 
 router = Router(name="cart")
@@ -325,6 +326,8 @@ async def handle_cart_confirm(callback: CallbackQuery, session: AsyncSession, st
         currency_override=currency,
         extra_attrs=extra_attrs,
     )
+
+    await attach_referral_to_order(session, order, user_id=profile.id)
 
     loyalty_meta_reserved = loyalty_meta
     if loyalty_points > 0 and loyalty_value > Decimal("0"):

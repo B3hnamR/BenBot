@@ -38,6 +38,7 @@ from app.infrastructure.db.repositories import (
 from app.services.container import membership_service
 from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
+from app.services.referral_service import ReferralService
 from app.services.order_service import OrderService
 from app.services.order_fulfillment import ensure_fulfillment
 from app.services.order_notification_service import OrderNotificationService
@@ -48,14 +49,54 @@ from app.services.crypto_payment_service import (
 )
 from app.services.coupon_order_service import release_coupon_for_order
 from app.services.loyalty_order_service import refund_loyalty_for_order
+from app.services.referral_order_service import cancel_referral_for_order
 
 router = Router(name="common")
 
 
 @router.message(CommandStart())
-async def handle_start(message: Message) -> None:
+async def handle_start(
+    message: Message,
+    session: AsyncSession,
+    user_profile,
+    user_profile_created: bool | None = False,
+) -> None:
+    profile = user_profile
+    if profile is None:
+        profile = await UserRepository(session).get_by_telegram_id(message.from_user.id)
+
+    extra_lines: list[str] = []
+    payload_code = _extract_referral_code(message.text or "")
+
+    if payload_code:
+        config_service = ConfigService(session)
+        referral_settings = await config_service.get_referral_settings()
+        if referral_settings.enabled and profile is not None:
+            referral_service = ReferralService(session)
+            link = await referral_service.get_link_by_code(payload_code)
+            if link and getattr(profile, "id", None) is not None and link.owner_user_id != profile.id:
+                await referral_service.record_click(link)
+                enrollment = await referral_service.record_signup(link, referred_user_id=profile.id)
+                label = (link.meta or {}).get("label") if link.meta else None
+                extra_lines.append(
+                    "Referral link registered!"
+                    f" You were referred by {label or 'a partner'} (link {link.code})."
+                )
+                if enrollment.id:
+                    extra_lines.append(f"Referral enrollment ID: {enrollment.id}.")
+            else:
+                extra_lines.append("Referral code is invalid or not applicable.")
+
+    welcome_lines = [
+        "Welcome to Ben Bot!",
+        "Use the interactive menu below to browse products, manage orders, or contact support.",
+    ]
+    if extra_lines:
+        welcome_lines.append("")
+        welcome_lines.extend(extra_lines)
+
     await message.answer(
-        "Welcome to Ben Bot!\nUse the interactive menu below to browse products, manage orders, or contact support.",
+        "\n".join(welcome_lines),
         reply_markup=main_menu_keyboard(show_admin=_user_is_owner(message.from_user.id)),
     )
 
@@ -212,6 +253,7 @@ async def handle_profile(callback: CallbackQuery, session: AsyncSession, state: 
 
     builder = InlineKeyboardBuilder()
     builder.button(text="My orders", callback_data=MainMenuCallback.ACCOUNT.value)
+    builder.button(text="My referrals", callback_data=MainMenuCallback.REFERRAL.value)
     builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
     builder.adjust(1)
 
@@ -316,6 +358,7 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession, st
     await order_service.mark_cancelled(order)
     await refund_loyalty_for_order(session, order, reason="user_cancelled")
     await release_coupon_for_order(session, order, reason="user_cancelled")
+    await cancel_referral_for_order(session, order, reason="user_cancelled")
     await OrderNotificationService(session).notify_cancelled(callback.bot, order, reason="user_cancelled")
     state_data = await state.get_data()
     page = int(state_data.get("user_orders_page", 0))
@@ -628,6 +671,29 @@ def _user_is_owner(user_id: int | None) -> bool:
         return False
     settings = get_settings()
     return user_id in settings.owner_user_ids
+
+
+def _extract_referral_code(text: str) -> str | None:
+    raw = text.strip() if text else ""
+    if not raw:
+        return None
+    parts = raw.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    payload = parts[1].strip()
+    if not payload:
+        return None
+    lowered = payload.lower()
+    if lowered.startswith("ref-") or lowered.startswith("ref_"):
+        code = payload[4:].strip()
+    elif lowered.startswith("ref"):
+        code = payload[3:].strip()
+    else:
+        return None
+    code = code.strip()
+    if not code:
+        return None
+    return code.upper()
 
 
 def _get_oxapay_payment(order: Order) -> dict[str, Any]:

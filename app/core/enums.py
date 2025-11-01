@@ -33,6 +33,12 @@ class SettingKey(StrEnum):
     LOYALTY_MIN_REDEEM_POINTS = "loyalty.min_redeem_points"
     LOYALTY_AUTO_EARN = "loyalty.auto_earn"
     LOYALTY_AUTO_PROMPT = "loyalty.auto_prompt"
+    REFERRAL_ENABLED = "referral.enabled"
+    REFERRAL_DEFAULT_REWARD_TYPE = "referral.default_reward_type"
+    REFERRAL_DEFAULT_REWARD_VALUE = "referral.default_reward_value"
+    REFERRAL_AUTO_REWARD = "referral.auto_reward"
+    REFERRAL_ALLOW_PUBLIC_LINKS = "referral.allow_public_links"
+    REFERRAL_RESELLERS = "referral.resellers"
 
 
 class OrderStatus(StrEnum):
