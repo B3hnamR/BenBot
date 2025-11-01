@@ -11,7 +11,7 @@ from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
-    from app.infrastructure.db.models import Coupon, Order
+    from app.infrastructure.db.models import Coupon, Order, OrderTimeline
 
 
 class AdminMenuCallback(StrEnum):
@@ -438,9 +438,19 @@ def _delivery_notice_sent(order: "Order") -> bool:
     return isinstance(delivery, dict) and bool(delivery.get("sent_at"))
 
 
-def order_timeline_menu_keyboard(order: "Order") -> InlineKeyboardMarkup:
+def order_timeline_menu_keyboard(
+    order: "Order",
+    *,
+    timeline: Sequence["OrderTimeline"] | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     public_id = order.public_id
+    events = list(timeline or getattr(order, "timelines", []) or [])
+    delivered_recorded = any(
+        getattr(entry, "event_type", None) == "status"
+        and getattr(entry, "status", None) == "delivered"
+        for entry in events
+    )
     builder.button(
         text="Processing",
         callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}processing:{public_id}",
@@ -449,10 +459,11 @@ def order_timeline_menu_keyboard(order: "Order") -> InlineKeyboardMarkup:
         text="Shipping",
         callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}shipping:{public_id}",
     )
-    builder.button(
-        text="Delivered",
-        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}delivered:{public_id}",
-    )
+    if not delivered_recorded:
+        builder.button(
+            text="Delivered",
+            callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}delivered:{public_id}",
+        )
     builder.button(
         text="Cancelled",
         callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}cancelled:{public_id}",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -1219,7 +1219,7 @@ async def _render_admin_order_detail(
     *,
     notice: str | None = None,
     reply_markup_override: InlineKeyboardMarkup
-    | Callable[[Order], InlineKeyboardMarkup]
+    | Callable[[Order, Sequence[OrderTimeline] | None], InlineKeyboardMarkup]
     | None = None,
     bot=None,
     chat_id: int | None = None,
@@ -1253,7 +1253,7 @@ async def _render_admin_order_detail(
     if notice:
         text = f"{notice}\n\n{text}"
     if callable(reply_markup_override):
-        markup = reply_markup_override(order)
+        markup = reply_markup_override(order, timeline)
     else:
         markup = reply_markup_override or order_manage_keyboard(order)
     if message is not None:
