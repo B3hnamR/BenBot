@@ -346,7 +346,10 @@ async def handle_admin_order_timeline_note_prompt(
         session,
         public_id,
         notice="Send the note text to append it to the timeline. Use /cancel to abort.",
-        reply_markup_override=order_timeline_menu_keyboard,
+        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
+            current_order,
+            timeline=current_timeline,
+        ),
     )
     await callback.answer("Waiting for note text…")
 
@@ -374,7 +377,10 @@ async def handle_admin_order_timeline_note_input(
             session,
             public_id,
             notice="Timeline note entry cancelled.",
-            reply_markup_override=order_timeline_menu_keyboard,
+            reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
+                current_order,
+                timeline=current_timeline,
+            ),
             bot=message.bot,
             chat_id=chat_id,
             message_id=target_message_id,
@@ -418,7 +424,10 @@ async def handle_admin_order_timeline_note_input(
         session,
         public_id,
         notice="Timeline note added.",
-        reply_markup_override=order_timeline_menu_keyboard,
+        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
+            current_order,
+            timeline=current_timeline,
+        ),
         bot=message.bot,
         chat_id=chat_id,
         message_id=target_message_id,
@@ -488,7 +497,14 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         session,
         public_id,
         notice="Order marked as paid.",
-        reply_markup_override=order_timeline_menu_keyboard if using_timeline else None,
+        reply_markup_override=(
+            (lambda current_order, current_timeline: order_timeline_menu_keyboard(
+                current_order,
+                timeline=current_timeline,
+            ))
+            if using_timeline
+            else None
+        ),
     )
     await callback.answer("Order marked as paid.")
 
@@ -606,7 +622,14 @@ async def handle_admin_order_notify_delivered(
         session,
         public_id,
         notice=notice,
-        reply_markup_override=order_timeline_menu_keyboard if using_timeline else None,
+        reply_markup_override=(
+            (lambda current_order, current_timeline: order_timeline_menu_keyboard(
+                current_order,
+                timeline=current_timeline,
+            ))
+            if using_timeline
+            else None
+        ),
     )
     await callback.answer("Customer notified.")
 
