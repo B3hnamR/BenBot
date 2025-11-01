@@ -2,7 +2,7 @@ from .cart import CartAdjustment, CartItem, ShoppingCart
 from .category import Category, ProductCategory
 from .coupon import Coupon, CouponRedemption
 from .loyalty import LoyaltyAccount, LoyaltyTransaction
-from .order import Order, OrderAnswer
+from .order import Order, OrderAnswer, OrderTimeline
 from .product import Product
 from .product_bundle import ProductBundleItem
 from .product_question import ProductQuestion
@@ -23,6 +23,7 @@ __all__ = [
     "LoyaltyTransaction",
     "Order",
     "OrderAnswer",
+    "OrderTimeline",
     "Product",
     "ProductBundleItem",
     "ProductCategory",
