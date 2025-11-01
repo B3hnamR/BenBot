@@ -55,6 +55,10 @@ router = Router(name="admin")
 
 RECENT_ORDERS_PAGE_SIZE = 10
 
+LEGACY_ADMIN_ORDER_TIMELINE_MENU_PREFIX = "admin:orders:timeline_menu:"
+LEGACY_ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "admin:orders:timeline_status:"
+LEGACY_ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "admin:orders:timeline_note:"
+
 
 @router.callback_query(F.data == MainMenuCallback.ADMIN.value)
 async def handle_admin_menu(callback: CallbackQuery, session: AsyncSession) -> None:
@@ -222,6 +226,11 @@ async def handle_admin_order_timeline_menu(
     state: FSMContext,
 ) -> None:
     public_id = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_MENU_PREFIX)
+    if public_id == callback.data:
+        public_id = callback.data.removeprefix(LEGACY_ADMIN_ORDER_TIMELINE_MENU_PREFIX)
+    if public_id == callback.data or not public_id:
+        await callback.answer("Invalid timeline request.", show_alert=True)
+        return
     if callback.message:
         await state.update_data(
             timeline_public_id=public_id,
@@ -246,6 +255,11 @@ async def handle_admin_order_timeline_status(
     state: FSMContext,
 ) -> None:
     raw = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_STATUS_PREFIX)
+    if raw == callback.data:
+        raw = callback.data.removeprefix(LEGACY_ADMIN_ORDER_TIMELINE_STATUS_PREFIX)
+    if raw == callback.data or not raw:
+        await callback.answer("Invalid timeline update.", show_alert=True)
+        return
     try:
         status_key, public_id = raw.split(":", 1)
     except ValueError:
@@ -289,6 +303,11 @@ async def handle_admin_order_timeline_note_prompt(
     state: FSMContext,
 ) -> None:
     public_id = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_NOTE_PREFIX)
+    if public_id == callback.data:
+        public_id = callback.data.removeprefix(LEGACY_ADMIN_ORDER_TIMELINE_NOTE_PREFIX)
+    if public_id == callback.data or not public_id:
+        await callback.answer("Invalid timeline note request.", show_alert=True)
+        return
     if callback.message:
         await state.update_data(
             timeline_public_id=public_id,
