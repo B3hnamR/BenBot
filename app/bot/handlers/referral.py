@@ -387,9 +387,13 @@ async def _render_dashboard(target, session: AsyncSession, user_profile, notice:
     settings = await ConfigService(session).get_referral_settings()
     if not settings.enabled:
         builder = InlineKeyboardBuilder()
-        builder.button(text="Back", callback_data=MainMenuCallback.PROFILE.value)
-        text = "Referral program is currently disabled."
-        await _edit_or_send(target, text, builder.as_markup())
+        builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
+        text_lines = [
+            "<b>Referral program</b>",
+            "This feature is currently disabled by the administrators.",
+            "You can return to the main menu using the button below.",
+        ]
+        await _edit_or_send(target, "\n".join(text_lines), builder.as_markup())
         return
 
     referral_service = ReferralService(session)

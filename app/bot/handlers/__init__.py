@@ -12,6 +12,7 @@ from . import (
     common,
     products,
     referral,
+    help,
     support,
 )
 from ..middlewares import OwnerAccessMiddleware
@@ -38,6 +39,7 @@ def register_handlers(dispatcher: Dispatcher, owner_middleware: OwnerAccessMiddl
     dispatcher.include_router(cart.router)
     dispatcher.include_router(products.router)
     dispatcher.include_router(referral.router)
+    dispatcher.include_router(help.router)
     dispatcher.include_router(admin_payments.router)
     dispatcher.include_router(admin_coupons.router)
     dispatcher.include_router(admin_support.router)
