@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order, Product
 from app.infrastructure.db.repositories import OrderRepository, ProductRepository
+from app.services.order_timeline_service import OrderTimelineService
 
 
 class OrderCreationError(RuntimeError):
@@ -20,6 +21,7 @@ class OrderService:
         self._session = session
         self._orders = OrderRepository(session)
         self._products = ProductRepository(session)
+        self._timeline = OrderTimelineService(session)
 
     async def get_product(self, product_id: int) -> Product | None:
         return await self._products.get_by_id(product_id)
@@ -76,6 +78,18 @@ class OrderService:
             await self._orders.add_answer(order, question_key=key, answer_text=value)
 
         await self._session.flush()
+        await self._timeline.add_event(
+            order,
+            status="created",
+            note="Order created",
+            actor="system",
+        )
+        await self._timeline.add_event(
+            order,
+            status="awaiting_payment",
+            note="Invoice issued",
+            actor="system",
+        )
         return order
 
     async def enforce_expiration(self, order: Order) -> Order:
@@ -89,20 +103,40 @@ class OrderService:
         aware_expires_at = self._ensure_utc(expires_at)
         if aware_expires_at <= datetime.now(tz=timezone.utc):
             order.status = OrderStatus.EXPIRED
+            await self._timeline.add_event(
+                order,
+                status="expired",
+                note="Invoice expired",
+                actor="system",
+            )
         return order
 
-    async def mark_cancelled(self, order: Order) -> Order:
+    async def mark_cancelled(self, order: Order, *, actor: str | None = None) -> Order:
         order.status = OrderStatus.CANCELLED
+        await self._timeline.add_event(
+            order,
+            status="cancelled",
+            note="Order cancelled",
+            actor=actor or "system",
+        )
         return order
 
-    async def mark_paid(self, order: Order, charge_id: str) -> Order:
-        return await self._orders.mark_paid(order, charge_id=charge_id)
+    async def mark_paid(self, order: Order, charge_id: str, *, actor: str | None = None) -> Order:
+        result = await self._orders.mark_paid(order, charge_id=charge_id)
+        await self._timeline.add_event(
+            order,
+            status="paid",
+            note="Payment received",
+            actor=actor or "system",
+        )
+        return result
 
     async def reopen_for_payment(
         self,
         order: Order,
         *,
         invoice_timeout_minutes: int,
+        actor: str | None = None,
     ) -> Order:
         if order.product is None:
             await self._session.refresh(order, attribute_names=["product"])
@@ -124,6 +158,12 @@ class OrderService:
         order.payment_expires_at = expires_at
 
         await self._session.flush()
+        await self._timeline.add_event(
+            order,
+            status="awaiting_payment",
+            note="Invoice reissued",
+            actor=actor or "system",
+        )
         return order
 
     @staticmethod

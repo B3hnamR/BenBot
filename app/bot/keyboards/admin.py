@@ -79,6 +79,9 @@ ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX = "admin:ord:delv:"
 ADMIN_RECENT_ORDERS_PAGE_PREFIX = "admin:orders:recent_page:"
 ADMIN_COUPON_VIEW_PREFIX = "admin:coupon:view:"
 ADMIN_COUPON_TOGGLE_PREFIX = "admin:coupon:toggle:"
+ADMIN_ORDER_TIMELINE_MENU_PREFIX = "admin:orders:timeline_menu:"
+ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "admin:orders:timeline_status:"
+ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "admin:orders:timeline_note:"
 ADMIN_COUPON_EDIT_MENU_PREFIX = "admin:coupon:editmenu:"
 ADMIN_COUPON_EDIT_FIELD_PREFIX = "admin:coupon:edit:"
 ADMIN_COUPON_USAGE_PREFIX = "admin:coupon:usage:"
@@ -400,6 +403,10 @@ def recent_orders_keyboard(
 
 def order_manage_keyboard(order: "Order") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Update timeline",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_MENU_PREFIX}{order.public_id}",
+    )
     if order.status in {OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
         builder.button(
             text="Mark as paid",
@@ -439,3 +446,33 @@ def _fulfillment_recorded(order: "Order") -> bool:
 def _delivery_notice_sent(order: "Order") -> bool:
     delivery = _oxapay_meta(order).get("delivery_notice")
     return isinstance(delivery, dict) and bool(delivery.get("sent_at"))
+
+
+def order_timeline_menu_keyboard(public_id: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Processing",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}processing:{public_id}",
+    )
+    builder.button(
+        text="Shipping",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}shipping:{public_id}",
+    )
+    builder.button(
+        text="Delivered",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}delivered:{public_id}",
+    )
+    builder.button(
+        text="Cancelled",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}cancelled:{public_id}",
+    )
+    builder.button(
+        text="Add note",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_NOTE_PREFIX}{public_id}",
+    )
+    builder.button(
+        text="Back",
+        callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{public_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()

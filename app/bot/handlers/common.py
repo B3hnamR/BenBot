@@ -29,7 +29,7 @@ from app.bot.keyboards.subscription import (
 )
 from app.core.config import get_settings
 from app.core.enums import OrderStatus
-from app.infrastructure.db.models import Order
+from app.infrastructure.db.models import Order, OrderTimeline
 from app.infrastructure.db.repositories import (
     RequiredChannelRepository,
     SupportRepository,
@@ -42,6 +42,7 @@ from app.services.referral_service import ReferralService
 from app.services.order_service import OrderService
 from app.services.order_fulfillment import ensure_fulfillment
 from app.services.order_notification_service import OrderNotificationService
+from app.services.order_timeline_service import OrderTimelineService
 from app.services.crypto_payment_service import (
     CryptoPaymentService,
     CryptoSyncResult,
@@ -314,11 +315,14 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession, stat
     if order.status == OrderStatus.EXPIRED and previous_status != OrderStatus.EXPIRED:
         await notifications.notify_expired(callback.bot, order, reason="timeout_check")
 
+    timeline_service = OrderTimelineService(session)
+    timeline = await timeline_service.list_events(order)
+
     state_data = await state.get_data()
     current_page = int(state_data.get("user_orders_page", 0))
     await _safe_edit_message(
         callback.message,
-        _format_order_details(order, crypto_status),
+        _format_order_details(order, crypto_status, timeline),
         reply_markup=order_details_keyboard(
             order,
             pay_link=crypto_status.pay_link,
@@ -355,7 +359,7 @@ async def handle_order_cancel(callback: CallbackQuery, session: AsyncSession, st
         await callback.answer("Order cannot be cancelled.", show_alert=True)
         return
 
-    await order_service.mark_cancelled(order)
+    await order_service.mark_cancelled(order, actor=f"user:{callback.from_user.id}")
     await refund_loyalty_for_order(session, order, reason="user_cancelled")
     await release_coupon_for_order(session, order, reason="user_cancelled")
     await cancel_referral_for_order(session, order, reason="user_cancelled")
@@ -398,7 +402,11 @@ async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession, s
     config_service = ConfigService(session)
     invoice_timeout = await config_service.invoice_timeout_minutes()
     try:
-        await order_service.reopen_for_payment(order, invoice_timeout_minutes=invoice_timeout)
+        await order_service.reopen_for_payment(
+            order,
+            invoice_timeout_minutes=invoice_timeout,
+            actor=f"user:{callback.from_user.id}",
+        )
     except Exception as exc:  # noqa: BLE001
         await callback.answer(str(exc), show_alert=True)
         return
@@ -408,12 +416,15 @@ async def handle_order_reissue(callback: CallbackQuery, session: AsyncSession, s
         await callback.answer(result.error, show_alert=True)
         return
 
+    timeline_service = OrderTimelineService(session)
+    timeline = await timeline_service.list_events(order)
+
     state_data = await state.get_data()
     current_page = int(state_data.get("user_orders_page", 0))
 
     await _safe_edit_message(
         callback.message,
-        _format_order_details(order, None),
+        _format_order_details(order, None, timeline),
         reply_markup=order_details_keyboard(
             order,
             pay_link=result.pay_link,
@@ -568,7 +579,11 @@ def _format_orders_overview(
     return "\n".join(lines)
 
 
-def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None = None) -> str:
+def _format_order_details(
+    order: Order,
+    crypto_status: CryptoSyncResult | None = None,
+    timeline: list[OrderTimeline] | None = None,
+) -> str:
     lines = [
         f"<b>Order {order.public_id}</b>",
         f"Status: {_order_display_status(order)}",
@@ -641,7 +656,37 @@ def _format_order_details(order: Order, crypto_status: CryptoSyncResult | None =
                 if detail:
                     lines.append(f" - {detail}")
 
+    status_entries = [
+        entry for entry in (timeline or []) if entry.event_type != "note"
+    ]
+    if status_entries:
+        lines.append("")
+        lines.append("<b>Timeline</b>")
+        for entry in status_entries:
+            lines.extend(_format_user_timeline_entry(entry))
+
     return "\n".join(lines)
+
+
+def _format_user_timeline_entry(entry: OrderTimeline) -> list[str]:
+    created_at = entry.created_at
+    if created_at is not None:
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        timestamp = created_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        timestamp = "-"
+
+    label = OrderTimelineService.label_for_status(entry.status)
+    note = (entry.note or "").strip()
+
+    line = f"{timestamp} - {label}"
+    lines = [line]
+
+    if note:
+        lines.append(f"  {note}")
+
+    return lines
 
 
 def _format_datetime(value: datetime | None) -> str:

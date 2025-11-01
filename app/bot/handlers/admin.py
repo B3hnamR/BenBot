@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from dataclasses import replace
@@ -7,7 +7,7 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.admin import (
@@ -21,19 +21,24 @@ from app.bot.keyboards.admin import (
     ADMIN_RECENT_ORDERS_PAGE_PREFIX,
     ADMIN_ORDER_RECEIPT_PREFIX,
     ADMIN_ORDER_VIEW_PREFIX,
+    ADMIN_ORDER_TIMELINE_MENU_PREFIX,
+    ADMIN_ORDER_TIMELINE_STATUS_PREFIX,
+    ADMIN_ORDER_TIMELINE_NOTE_PREFIX,
     admin_menu_keyboard,
     crypto_settings_keyboard,
     order_manage_keyboard,
     order_settings_keyboard,
     recent_orders_keyboard,
+    order_timeline_menu_keyboard,
     loyalty_settings_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.states.admin_crypto import AdminCryptoState
 from app.bot.states.admin_loyalty import AdminLoyaltyState
+from app.bot.states.admin_order import AdminOrderTimelineState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus
-from app.infrastructure.db.models import Order
+from app.infrastructure.db.models import Order, OrderTimeline
 from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.config_service import ConfigService
 from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
@@ -44,6 +49,7 @@ from app.services.order_notification_service import OrderNotificationService
 from app.services.loyalty_order_service import refund_loyalty_for_order
 from app.services.order_service import OrderService
 from app.services.order_summary import build_order_summary
+from app.services.order_timeline_service import OrderTimelineService
 
 router = Router(name="admin")
 
@@ -209,6 +215,179 @@ async def handle_admin_order_view(callback: CallbackQuery, session: AsyncSession
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith(ADMIN_ORDER_TIMELINE_MENU_PREFIX))
+async def handle_admin_order_timeline_menu(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_MENU_PREFIX)
+    if callback.message:
+        await state.update_data(
+            timeline_public_id=public_id,
+            timeline_chat_id=callback.message.chat.id,
+            timeline_message_id=callback.message.message_id,
+        )
+    await state.set_state(None)
+    await _render_admin_order_detail(
+        callback.message,
+        session,
+        public_id,
+        notice="Timeline tools: choose a status or add an internal note.",
+        reply_markup_override=order_timeline_menu_keyboard(public_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_TIMELINE_STATUS_PREFIX))
+async def handle_admin_order_timeline_status(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    raw = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_STATUS_PREFIX)
+    try:
+        status_key, public_id = raw.split(":", 1)
+    except ValueError:
+        await callback.answer("Invalid timeline update.", show_alert=True)
+        return
+
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await callback.answer("Order not found.", show_alert=True)
+        if callback.message:
+            await _render_recent_orders_message(callback.message, session, notice="Order removed.")
+        return
+
+    actor = f"admin:{callback.from_user.id}"
+    timeline_service = OrderTimelineService(session)
+    await timeline_service.add_event(order, status=status_key, actor=actor)
+
+    label = OrderTimelineService.label_for_status(status_key)
+    if callback.message:
+        await state.update_data(
+            timeline_public_id=public_id,
+            timeline_chat_id=callback.message.chat.id,
+            timeline_message_id=callback.message.message_id,
+        )
+
+    await _render_admin_order_detail(
+        callback.message,
+        session,
+        public_id,
+        notice=f"{label} recorded on timeline.",
+        reply_markup_override=order_timeline_menu_keyboard(public_id),
+    )
+    await callback.answer("Timeline updated.")
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_TIMELINE_NOTE_PREFIX))
+async def handle_admin_order_timeline_note_prompt(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    public_id = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_NOTE_PREFIX)
+    if callback.message:
+        await state.update_data(
+            timeline_public_id=public_id,
+            timeline_chat_id=callback.message.chat.id,
+            timeline_message_id=callback.message.message_id,
+        )
+    await state.set_state(AdminOrderTimelineState.add_note)
+    await _render_admin_order_detail(
+        callback.message,
+        session,
+        public_id,
+        notice="Send the note text to append it to the timeline. Use /cancel to abort.",
+        reply_markup_override=order_timeline_menu_keyboard(public_id),
+    )
+    await callback.answer("Waiting for note text…")
+
+
+@router.message(AdminOrderTimelineState.add_note)
+async def handle_admin_order_timeline_note_input(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    public_id = data.get("timeline_public_id")
+    chat_id = data.get("timeline_chat_id")
+    target_message_id = data.get("timeline_message_id")
+
+    if not public_id:
+        await message.answer("Timeline context expired. Please reopen the order.")
+        await state.set_state(None)
+        return
+
+    if text.lower() in {"/cancel", "cancel", "exit", "abort"}:
+        await _render_admin_order_detail(
+            None,
+            session,
+            public_id,
+            notice="Timeline note entry cancelled.",
+            reply_markup_override=order_timeline_menu_keyboard(public_id),
+            bot=message.bot,
+            chat_id=chat_id,
+            message_id=target_message_id,
+        )
+        await message.answer("Cancelled.")
+        await state.update_data(
+            timeline_public_id=None,
+            timeline_chat_id=None,
+            timeline_message_id=None,
+        )
+        await state.set_state(None)
+        return
+
+    if not text:
+        await message.answer("Please send a non-empty note or /cancel.")
+        return
+
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None:
+        await message.answer("Order not found. Please refresh the admin panel.")
+        await state.update_data(
+            timeline_public_id=None,
+            timeline_chat_id=None,
+            timeline_message_id=None,
+        )
+        await state.set_state(None)
+        return
+
+    actor = f"admin:{message.from_user.id}"
+    timeline_service = OrderTimelineService(session)
+    await timeline_service.add_event(
+        order,
+        event_type="note",
+        note=text,
+        actor=actor,
+    )
+
+    await _render_admin_order_detail(
+        None,
+        session,
+        public_id,
+        notice="Timeline note added.",
+        reply_markup_override=order_timeline_menu_keyboard(public_id),
+        bot=message.bot,
+        chat_id=chat_id,
+        message_id=target_message_id,
+    )
+
+    await message.answer("Note saved to timeline.")
+    await state.update_data(
+        timeline_public_id=None,
+        timeline_chat_id=None,
+        timeline_message_id=None,
+    )
+    await state.set_state(None)
+
+
 @router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_PAID_PREFIX))
 async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSession) -> None:
     public_id = callback.data.removeprefix(ADMIN_ORDER_MARK_PAID_PREFIX)
@@ -233,7 +412,7 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         await _render_admin_order_detail(callback.message, session, public_id)
         return
     charge_id = f"manual:{datetime.now(tz=timezone.utc).isoformat()}"
-    await order_service.mark_paid(order, charge_id=charge_id)
+    await order_service.mark_paid(order, charge_id=charge_id, actor=f"admin:{callback.from_user.id}")
     order.invoice_payload = None
     order.payment_provider = "manual"
     await ensure_fulfillment(session, callback.bot, order, source="admin_manual_paid")
@@ -314,6 +493,14 @@ async def handle_admin_order_notify_delivered(callback: CallbackQuery, session: 
     await OrderRepository(session).merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: meta})
     order.extra_attrs = order.extra_attrs or {}
     order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
+
+    timeline_service = OrderTimelineService(session)
+    await timeline_service.add_event(
+        order,
+        event_type="note",
+        note="Delivery notice sent to the customer.",
+        actor=f"admin:{callback.from_user.id}",
+    )
 
     notice = "Delivery notice sent to the customer."
     await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
@@ -928,16 +1115,30 @@ async def _render_recent_orders_message(
 
 
 async def _render_admin_order_detail(
-    message: Message,
+    message: Message | None,
     session: AsyncSession,
     public_id: str,
     *,
     notice: str | None = None,
+    reply_markup_override: InlineKeyboardMarkup | None = None,
+    bot=None,
+    chat_id: int | None = None,
+    message_id: int | None = None,
 ) -> None:
     order_service = OrderService(session)
     order = await order_service.get_order_by_public_id(public_id)
     if order is None:
-        await _render_recent_orders_message(message, session, notice="Order no longer exists.")
+        if message is not None:
+            await _render_recent_orders_message(message, session, notice="Order no longer exists.")
+        elif bot and chat_id and message_id:
+            try:
+                await bot.edit_message_text(
+                    "Order no longer exists.",
+                    chat_id=chat_id,
+                    message_id=message_id,
+                )
+            except Exception:
+                pass
         return
 
     try:
@@ -945,14 +1146,36 @@ async def _render_admin_order_detail(
     except Exception:
         pass
 
-    text = _format_admin_order_detail(order)
+    timeline_service = OrderTimelineService(session)
+    timeline = await timeline_service.list_events(order)
+
+    text = _format_admin_order_detail(order, timeline)
     if notice:
         text = f"{notice}\n\n{text}"
-    markup = order_manage_keyboard(order)
-    try:
-        await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except Exception:
-        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+    markup = reply_markup_override or order_manage_keyboard(order)
+    if message is not None:
+        try:
+            await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+    elif bot and chat_id and message_id:
+        try:
+            await bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            await bot.send_message(
+                chat_id,
+                text,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+    else:
+        return
 
 
 async def _render_crypto_settings_message(
@@ -1132,7 +1355,10 @@ def _format_recent_orders_text(
     return "\n".join(lines)
 
 
-def _format_admin_order_detail(order: Order) -> str:
+def _format_admin_order_detail(
+    order: Order,
+    timeline: list[OrderTimeline] | None = None,
+) -> str:
     lines = [
         f"<b>Order {order.public_id}</b>",
         f"Status: {order.status.value.replace('_', ' ').title()}",
@@ -1199,7 +1425,37 @@ def _format_admin_order_detail(order: Order) -> str:
         if sender:
             lines.append(f"Source: {sender}")
 
+    if timeline:
+        lines.append("")
+        lines.append("<b>Timeline</b>")
+        for entry in timeline:
+            lines.extend(_format_timeline_entry(entry))
+
     return "\n".join(lines)
+
+
+def _format_timeline_entry(entry: OrderTimeline) -> list[str]:
+    created_at = entry.created_at
+    if created_at is not None:
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_text = f"{created_at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S UTC}"
+    else:
+        created_text = "-"
+
+    if entry.event_type == "note":
+        label = "Note"
+    else:
+        label = OrderTimelineService.label_for_status(entry.status)
+
+    actor = f" (by {entry.actor})" if entry.actor else ""
+    lines = [f"{created_text} - {label}{actor}"]
+
+    note = (entry.note or "").strip()
+    if note:
+        lines.append(f"  {note}")
+
+    return lines
 
 
 def _format_delivery_notice(order: Order, *, meta: dict[str, Any]) -> str:

@@ -5,6 +5,7 @@ from .loyalty_service import LoyaltyService
 from .product_admin_service import ProductAdminService
 from .recommendation_service import RecommendationService
 from .referral_service import ReferralService
+from .order_timeline_service import OrderTimelineService
 from .support_service import SupportService, TicketFilters
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "ProductAdminService",
     "RecommendationService",
     "ReferralService",
+    "OrderTimelineService",
     "SupportService",
     "TicketFilters",
 ]

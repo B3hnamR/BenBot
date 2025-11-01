@@ -17,6 +17,7 @@ from app.services.coupon_order_service import finalize_coupon_on_paid
 from app.services.referral_order_service import finalize_referral_on_paid
 from app.services.loyalty_order_service import finalize_loyalty_on_paid
 from app.services.order_summary import build_order_summary
+from app.services.order_timeline_service import OrderTimelineService
 
 
 log = get_logger(__name__)
@@ -97,6 +98,14 @@ async def ensure_fulfillment(
     await OrderRepository(session).merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: meta})
     order.extra_attrs = order.extra_attrs or {}
     order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
+
+    timeline = OrderTimelineService(session)
+    await timeline.add_event(
+        order,
+        status="delivered",
+        note="Order delivered to the customer.",
+        actor=f"system:{source}",
+    )
     return True
 
 

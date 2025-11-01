@@ -5,6 +5,7 @@ from .category import CategoryRepository
 from .coupon import CouponRepository
 from .loyalty import LoyaltyRepository
 from .order import OrderRepository
+from .order_timeline import OrderTimelineRepository
 from .product import ProductRepository
 from .product_bundle import ProductBundleRepository
 from .product_question import ProductQuestionRepository
@@ -21,6 +22,7 @@ __all__ = [
     "CouponRepository",
     "LoyaltyRepository",
     "OrderRepository",
+    "OrderTimelineRepository",
     "ProductRepository",
     "ProductBundleRepository",
     "ProductQuestionRepository",

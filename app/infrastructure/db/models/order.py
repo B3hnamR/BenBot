@@ -46,6 +46,12 @@ class Order(IntPKMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
     support_tickets: Mapped[list["SupportTicket"]] = relationship("SupportTicket", back_populates="order")
+    timelines: Mapped[list["OrderTimeline"]] = relationship(
+        "OrderTimeline",
+        back_populates="order",
+        order_by="OrderTimeline.created_at",
+        cascade="all, delete-orphan",
+    )
 
 
 class OrderAnswer(IntPKMixin, TimestampMixin, Base):
@@ -57,3 +63,16 @@ class OrderAnswer(IntPKMixin, TimestampMixin, Base):
     extra_data: Mapped[dict | None] = mapped_column(JSON())
 
     order: Mapped[Order] = relationship("Order", back_populates="answers")
+
+
+class OrderTimeline(IntPKMixin, TimestampMixin, Base):
+    __tablename__ = "order_timelines"
+
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(length=32), default="status", nullable=False)
+    status: Mapped[str | None] = mapped_column(String(length=32))
+    note: Mapped[str | None] = mapped_column(String(length=512))
+    actor: Mapped[str | None] = mapped_column(String(length=64))
+    meta: Mapped[dict | None] = mapped_column(JSON())
+
+    order: Mapped[Order] = relationship("Order", back_populates="timelines")
