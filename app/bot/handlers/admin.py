@@ -314,7 +314,10 @@ async def handle_admin_order_timeline_status(
         session,
         public_id,
         notice=notice_text,
-        reply_markup_override=order_timeline_menu_keyboard,
+        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
+            current_order,
+            timeline=current_timeline,
+        ),
     )
     await callback.answer(answer_text)
 
