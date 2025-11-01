@@ -471,6 +471,14 @@ def order_timeline_menu_keyboard(public_id: str) -> InlineKeyboardMarkup:
         callback_data=f"{ADMIN_ORDER_TIMELINE_NOTE_PREFIX}{public_id}",
     )
     builder.button(
+        text="Mark as paid",
+        callback_data=f"{ADMIN_ORDER_MARK_PAID_PREFIX}{public_id}",
+    )
+    builder.button(
+        text="Notify delivered",
+        callback_data=f"{ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX}{public_id}",
+    )
+    builder.button(
         text="Back",
         callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{public_id}",
     )

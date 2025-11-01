@@ -276,9 +276,27 @@ async def handle_admin_order_timeline_status(
 
     actor = f"admin:{callback.from_user.id}"
     timeline_service = OrderTimelineService(session)
-    await timeline_service.add_event(order, status=status_key, actor=actor)
+    notice_text: str
+    answer_text = "Timeline updated."
+    if status_key == "cancelled":
+        if order.status != OrderStatus.CANCELLED:
+            reason = "admin_timeline_cancelled"
+            await order_service.mark_cancelled(order, actor=actor)
+            await session.flush()
+            await refund_loyalty_for_order(session, order, reason=reason)
+            await release_coupon_for_order(session, order, reason=reason)
+            await cancel_referral_for_order(session, order, reason=reason)
+            notifications = OrderNotificationService(session)
+            await notifications.notify_cancelled(callback.bot, order, reason=reason)
+            notice_text = "Order cancelled and recorded on the timeline."
+            answer_text = "Order cancelled."
+        else:
+            notice_text = "Order already cancelled."
+            answer_text = "Order already cancelled."
+    else:
+        await timeline_service.add_event(order, status=status_key, actor=actor)
+        notice_text = f"{OrderTimelineService.label_for_status(status_key)} recorded on timeline."
 
-    label = OrderTimelineService.label_for_status(status_key)
     if callback.message:
         await state.update_data(
             timeline_public_id=public_id,
@@ -290,10 +308,10 @@ async def handle_admin_order_timeline_status(
         callback.message,
         session,
         public_id,
-        notice=f"{label} recorded on timeline.",
+        notice=notice_text,
         reply_markup_override=order_timeline_menu_keyboard(public_id),
     )
-    await callback.answer("Timeline updated.")
+    await callback.answer(answer_text)
 
 
 @router.callback_query(F.data.startswith(ADMIN_ORDER_TIMELINE_NOTE_PREFIX))
