@@ -25,7 +25,8 @@ def main_menu_keyboard(show_admin: bool = False) -> InlineKeyboardMarkup:
     builder.button(text="My orders", callback_data=MainMenuCallback.ACCOUNT.value)
     builder.button(text="My profile", callback_data=MainMenuCallback.PROFILE.value)
     builder.button(text="Support", callback_data=MainMenuCallback.SUPPORT.value)
-    builder.button(text="Help", callback_data=MainMenuCallback.HELP.value)
+    if show_admin:
+        builder.button(text="Help", callback_data=MainMenuCallback.HELP.value)
     builder.button(text="Referral center", callback_data=MainMenuCallback.REFERRAL.value)
     if show_admin:
         builder.button(text="Admin panel", callback_data=MainMenuCallback.ADMIN.value)
