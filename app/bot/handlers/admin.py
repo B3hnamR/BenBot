@@ -243,7 +243,10 @@ async def handle_admin_order_timeline_menu(
         session,
         public_id,
         notice="Timeline tools: choose a status or add an internal note.",
-        reply_markup_override=order_timeline_menu_keyboard,
+        reply_markup_override=lambda current_order, current_timeline: order_timeline_menu_keyboard(
+            current_order,
+            timeline=current_timeline,
+        ),
     )
     await callback.answer()
 
