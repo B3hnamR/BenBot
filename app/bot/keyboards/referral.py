@@ -27,7 +27,7 @@ def referral_dashboard_keyboard(links: Sequence[ReferralLink]) -> InlineKeyboard
         title = f"{label} ({link.code})" if label else f"Link {link.code}"
         builder.button(text=title, callback_data=f"{REFERRAL_LINK_PREFIX}{link.id}")
     builder.button(text="Refresh", callback_data=REFERRAL_REFRESH)
-    builder.button(text="Back", callback_data=MainMenuCallback.PROFILE.value)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
     builder.adjust(1)
     return builder.as_markup()
 
