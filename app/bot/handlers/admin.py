@@ -50,6 +50,7 @@ from app.services.loyalty_order_service import refund_loyalty_for_order
 from app.services.order_service import OrderService
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
+from app.services.order_status_notifier import notify_user_status
 
 router = Router(name="admin")
 
@@ -302,6 +303,8 @@ async def handle_admin_order_timeline_status(
         await timeline_service.add_event(order, status=status_key, actor=actor)
         notice_text = f"{label} recorded on timeline."
         answer_text = f"{label} logged."
+        if status_key in {"processing", "shipping", "delivered"}:
+            await notify_user_status(callback.bot, order, status_key)
 
     if callback.message:
         await state.update_data(

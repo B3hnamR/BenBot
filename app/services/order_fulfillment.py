@@ -16,6 +16,7 @@ from app.services.order_notification_service import OrderNotificationService
 from app.services.coupon_order_service import finalize_coupon_on_paid
 from app.services.referral_order_service import finalize_referral_on_paid
 from app.services.loyalty_order_service import finalize_loyalty_on_paid
+from app.services.order_status_notifier import notify_user_status
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
 
@@ -63,6 +64,26 @@ async def ensure_fulfillment(
     if user is None or user.telegram_id is None:
         return False
 
+    timeline_service = OrderTimelineService(session)
+    existing_events = await timeline_service.list_events(order)
+    has_shipping_event = any(
+        getattr(entry, "event_type", None) == "status"
+        and getattr(entry, "status", None) == "shipping"
+        for entry in existing_events
+    )
+    if not has_shipping_event:
+        await timeline_service.add_event(
+            order,
+            status="shipping",
+            note="Order is being prepared for delivery.",
+            actor=f"system:{source}",
+        )
+        await notify_user_status(
+            bot,
+            order,
+            "shipping",
+        )
+
     inventory_update = await _apply_inventory_adjustment(order)
 
     fulfillment_service = FulfillmentService(session)
@@ -99,8 +120,7 @@ async def ensure_fulfillment(
     order.extra_attrs = order.extra_attrs or {}
     order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
 
-    timeline = OrderTimelineService(session)
-    await timeline.add_event(
+    await timeline_service.add_event(
         order,
         status="delivered",
         note="Order delivered to the customer.",
