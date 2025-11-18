@@ -65,7 +65,7 @@ def orders_list_keyboard(
             )
         )
     builder.row(*nav_buttons)
-    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -105,7 +105,7 @@ def order_details_keyboard(
         else ORDER_LIST_BACK_CALLBACK
     )
     builder.button(text="Back to orders", callback_data=back_callback)
-    builder.button(text="Back to menu", callback_data=MainMenuCallback.PRODUCTS.value)
+    builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -123,9 +123,17 @@ def _order_summary_line(order: Order) -> str:
 
 
 def _order_display_status(order: Order) -> str:
-    status = order.status.value.replace("_", " ").title()
+    base_status = order.status.value.replace("_", " ").title()
     if order.status == OrderStatus.PAID:
         extra = order.extra_attrs or {}
+        timeline_snapshot = extra.get("timeline_status")
+        if isinstance(timeline_snapshot, dict):
+            label = timeline_snapshot.get("label")
+            if label:
+                return label
+            status_key = timeline_snapshot.get("status")
+            if status_key:
+                return status_key.replace("_", " ").title()
         meta = extra.get(OXAPAY_EXTRA_KEY)
         if isinstance(meta, dict):
             notice = meta.get("delivery_notice")
@@ -134,4 +142,4 @@ def _order_display_status(order: Order) -> str:
             fulfillment = meta.get("fulfillment")
             if isinstance(fulfillment, dict) and fulfillment.get("delivered_at"):
                 return "Fulfilled"
-    return status
+    return base_status

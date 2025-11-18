@@ -748,14 +748,22 @@ def _get_oxapay_payment(order: Order) -> dict[str, Any]:
 def _order_display_status(order: Order) -> str:
     base = order.status.value.replace("_", " ").title()
     if order.status == OrderStatus.PAID:
+        extra = order.extra_attrs or {}
+        timeline_snapshot = extra.get("timeline_status")
+        if isinstance(timeline_snapshot, dict):
+            label = timeline_snapshot.get("label")
+            if label:
+                return label
+            status_key = timeline_snapshot.get("status")
+            if status_key:
+                return status_key.replace("_", " ").title()
         oxapay = _get_oxapay_payment(order)
-        if isinstance(oxapay, dict):
-            notice = oxapay.get("delivery_notice")
-            if isinstance(notice, dict) and notice.get("sent_at"):
-                return "Delivered"
-            fulfillment = oxapay.get("fulfillment")
-            if isinstance(fulfillment, dict) and fulfillment.get("delivered_at"):
-                return "Fulfilled"
+        notice = oxapay.get("delivery_notice")
+        if isinstance(notice, dict) and notice.get("sent_at"):
+            return "Delivered"
+        fulfillment = oxapay.get("fulfillment")
+        if isinstance(fulfillment, dict) and fulfillment.get("delivered_at"):
+            return "Fulfilled"
     return base
 
 

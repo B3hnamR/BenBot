@@ -964,12 +964,25 @@ async def handle_admin_order_notify_delivered(
     order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
 
     timeline_service = OrderTimelineService(session)
-    await timeline_service.add_event(
-        order,
-        event_type="note",
-        note="Delivery notice sent to the customer.",
-        actor=f"admin:{callback.from_user.id}",
-    )
+    actor = f"admin:{callback.from_user.id}"
+    timeline_status = (order.extra_attrs or {}).get("timeline_status") or {}
+    latest_status = None
+    if isinstance(timeline_status, dict):
+        latest_status = timeline_status.get("status")
+    if latest_status != "delivered":
+        await timeline_service.add_event(
+            order,
+            status="delivered",
+            actor=actor,
+            note="Manual delivery notice sent to the customer.",
+        )
+    else:
+        await timeline_service.add_event(
+            order,
+            event_type="note",
+            note="Delivery notice re-sent to the customer.",
+            actor=actor,
+        )
 
     state_data = await state.get_data()
     using_timeline = state_data.get("timeline_public_id") == public_id
