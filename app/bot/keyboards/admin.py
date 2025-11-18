@@ -468,8 +468,12 @@ def order_timeline_menu_keyboard(
     builder = InlineKeyboardBuilder()
     public_id = order.public_id
     options = list(statuses or TimelineStatusRegistry.show_in_menu())
+    requires_paid = {"processing", "shipping", "delivered"}
+    paid_like_statuses = {OrderStatus.PAID, OrderStatus.CANCELLED, OrderStatus.EXPIRED}
     if options:
         for status in options:
+            if order.status not in paid_like_statuses and status.key in requires_paid:
+                continue
             builder.button(
                 text=status.label,
                 callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}{status.key}:{public_id}",

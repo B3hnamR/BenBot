@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.db.models import Order, OrderTimeline
 from app.infrastructure.db.repositories.order_timeline import OrderTimelineRepository
-from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 from app.services.timeline_status_service import TimelineStatusRegistry
 
 
@@ -50,8 +49,6 @@ class OrderTimelineService:
         )
         if status and isinstance(order, Order):
             self._update_order_snapshot(order, status, actor, entry.created_at)
-            if status == "delivered":
-                self._ensure_delivery_notice(order, actor, entry.created_at)
         return entry
 
     async def list_events(self, order: Order | int) -> list[OrderTimeline]:
@@ -99,24 +96,23 @@ class OrderTimelineService:
         extra["timeline_status"] = snapshot
         order.extra_attrs = extra
 
-    @staticmethod
-    def _ensure_delivery_notice(
-        order: Order,
-        actor: str | None,
-        timestamp: datetime | None,
-    ) -> None:
-        extra = dict(order.extra_attrs or {})
-        meta = extra.get(OXAPAY_EXTRA_KEY)
-        meta_dict = dict(meta) if isinstance(meta, dict) else {}
-        delivery_record = meta_dict.get("delivery_notice")
-        if isinstance(delivery_record, dict) and delivery_record.get("sent_at"):
-            extra[OXAPAY_EXTRA_KEY] = meta_dict
-            order.extra_attrs = extra
+    async def sync_snapshots_for_orders(self, orders: Iterable[Order]) -> None:
+        order_list = [order for order in orders if order is not None and getattr(order, "id", None)]
+        targets = [
+            order
+            for order in order_list
+            if not isinstance((order.extra_attrs or {}).get("timeline_status"), dict)
+        ]
+        if not targets:
             return
-        record = {
-            "sent_at": (timestamp or datetime.now(tz=timezone.utc)).isoformat(),
-            "sent_by": actor or "system",
-        }
-        meta_dict["delivery_notice"] = record
-        extra[OXAPAY_EXTRA_KEY] = meta_dict
-        order.extra_attrs = extra
+        order_map = {order.id: order for order in targets if order.id}
+        latest_map = await self._repo.latest_status_map(list(order_map.keys()))
+        for order_id, entry in latest_map.items():
+            status = entry.status
+            if not status:
+                continue
+            order = order_map.get(order_id)
+            if not order:
+                continue
+            self._update_order_snapshot(order, status, entry.actor, entry.created_at)
+        await self._session.flush()

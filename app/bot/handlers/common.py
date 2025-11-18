@@ -316,6 +316,8 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession, stat
 
     timeline_service = OrderTimelineService(session)
     timeline = await timeline_service.list_events(order)
+    if not isinstance((order.extra_attrs or {}).get("timeline_status"), dict):
+        await timeline_service.sync_snapshots_for_orders([order])
 
     state_data = await state.get_data()
     current_page = int(state_data.get("user_orders_page", 0))
@@ -519,6 +521,8 @@ async def _render_orders_overview(
 
     if state is not None:
         await state.update_data(user_orders_page=page)
+
+    await OrderTimelineService(session).sync_snapshots_for_orders(orders)
 
     summary = _format_orders_overview(
         orders,

@@ -19,7 +19,7 @@ from app.services.loyalty_order_service import finalize_loyalty_on_paid
 from app.services.order_status_notifier import notify_user_status
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
-from app.services.timeline_status_service import TimelineStatusRegistry
+from app.services.timeline_status_service import TimelineStatusRegistry, TimelineStatusService
 
 
 log = get_logger(__name__)
@@ -67,6 +67,7 @@ async def ensure_fulfillment(
 
     inventory_update = await _apply_inventory_adjustment(order)
 
+    await TimelineStatusService(session).refresh_registry()
     fulfillment_service = FulfillmentService(session)
     action_result = await fulfillment_service.execute(order, bot)
 

@@ -171,6 +171,9 @@ class TimelineStatusService:
             TimelineStatusRegistry.set_statuses(statuses)
         return statuses
 
+    async def refresh_registry(self) -> list[TimelineStatusDefinition]:
+        return await self.list_statuses()
+
     async def add_status(
         self,
         key: str,
