@@ -4,10 +4,12 @@ from .coupon import Coupon, CouponRedemption
 from .loyalty import LoyaltyAccount, LoyaltyTransaction
 from .order import (
     AdminActionLog,
+    InstantInventoryItem,
     Order,
     OrderAnswer,
     OrderFeedback,
     OrderFulfillmentTask,
+    OrderPausePeriod,
     OrderTimeline,
 )
 from .product import Product
@@ -27,12 +29,14 @@ __all__ = [
     "Coupon",
     "CouponRedemption",
     "AdminActionLog",
+    "InstantInventoryItem",
     "LoyaltyAccount",
     "LoyaltyTransaction",
     "Order",
     "OrderAnswer",
     "OrderFeedback",
     "OrderFulfillmentTask",
+    "OrderPausePeriod",
     "OrderTimeline",
     "Product",
     "ProductBundleItem",
