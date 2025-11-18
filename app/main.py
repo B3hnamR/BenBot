@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.infrastructure.db.session import init_engine, session_factory
 from app.services.container import membership_service
+from app.services.timeline_status_service import TimelineStatusService
 
 
 async def setup_middlewares(dispatcher: Dispatcher, owner_middleware: OwnerAccessMiddleware) -> None:
@@ -35,6 +36,7 @@ async def setup_middlewares(dispatcher: Dispatcher, owner_middleware: OwnerAcces
 async def bootstrap_default_settings() -> None:
     async with session_factory() as session:
         await membership_service.ensure_default_settings(session)
+        await TimelineStatusService(session).ensure_defaults()
         await session.commit()
 
 

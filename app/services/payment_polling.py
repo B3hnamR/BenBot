@@ -19,6 +19,7 @@ from app.services.referral_order_service import cancel_referral_for_order
 from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
 from app.services.loyalty_order_service import refund_loyalty_for_order
+from app.services.timeline_status_service import TimelineStatusService
 
 log = get_logger(__name__)
 
@@ -80,6 +81,9 @@ async def run(interval_seconds: int = 60, *, batch_size: int = 25) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     await init_engine()
+    async with session_factory() as bootstrap_session:
+        await TimelineStatusService(bootstrap_session).ensure_defaults()
+        await bootstrap_session.commit()
 
     bot: Optional[Bot] = None
     try:

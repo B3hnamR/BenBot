@@ -19,6 +19,7 @@ from app.services.loyalty_order_service import finalize_loyalty_on_paid
 from app.services.order_status_notifier import notify_user_status
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
+from app.services.timeline_status_service import TimelineStatusRegistry
 
 
 log = get_logger(__name__)
@@ -69,7 +70,7 @@ async def ensure_fulfillment(
     fulfillment_service = FulfillmentService(session)
     action_result = await fulfillment_service.execute(order, bot)
 
-    shipping_note = _build_shipping_note(order, inventory_update, action_result)
+    status_note = _build_shipping_note(order, inventory_update, action_result)
 
     timeline_service = OrderTimelineService(session)
     existing_events = await timeline_service.list_events(order)
@@ -85,12 +86,8 @@ async def ensure_fulfillment(
             note="Order is being prepared for delivery.",
             actor=f"system:{source}",
         )
-        await notify_user_status(
-            bot,
-            order,
-            "shipping",
-            note=shipping_note,
-        )
+        if TimelineStatusRegistry.notify_enabled("shipping"):
+            await notify_user_status(bot, order, "shipping", note=status_note)
 
     notification_extra = _inventory_admin_lines(inventory_update, action_result)
     notifications = OrderNotificationService(session)
@@ -124,6 +121,8 @@ async def ensure_fulfillment(
         note="Order delivered to the customer.",
         actor=f"system:{source}",
     )
+    if TimelineStatusRegistry.notify_enabled("delivered"):
+        await notify_user_status(bot, order, "delivered", note=status_note)
     return True
 
 

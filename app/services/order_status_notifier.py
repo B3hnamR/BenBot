@@ -6,10 +6,11 @@ from aiogram import Bot
 
 from app.core.logging import get_logger
 from app.infrastructure.db.models import Order
+from app.services.timeline_status_service import TimelineStatusRegistry
 
 log = get_logger(__name__)
 
-STATUS_MESSAGES: Mapping[str, str] = {
+DEFAULT_STATUS_MESSAGES: Mapping[str, str] = {
     "processing": (
         "Order <code>{order_id}</code> is now being processed.\n"
         "We'll let you know as soon as it ships."
@@ -32,16 +33,28 @@ async def notify_user_status(
     *,
     note: str | None = None,
 ) -> bool:
-    template = STATUS_MESSAGES.get(status)
+    definition = TimelineStatusRegistry.get(status)
+    template = None
+    if definition and definition.user_message:
+        template = definition.user_message
     if template is None:
-        return False
+        template = DEFAULT_STATUS_MESSAGES.get(status)
+    if template is None:
+        template = "Order <code>{order_id}</code> status updated: {status_label}."
 
     user = getattr(order, "user", None)
     chat_id = getattr(user, "telegram_id", None)
     if chat_id is None:
         return False
 
-    message_lines = [template.format(order_id=order.public_id)]
+    status_label = definition.label if definition else (status.replace("_", " ").title() if status else "Update")
+    message_lines = [
+        template.format(
+            order_id=order.public_id,
+            status=status,
+            status_label=status_label,
+        )
+    ]
     if note:
         message_lines.append("")
         message_lines.append(note)

@@ -20,6 +20,7 @@ class SettingKey(StrEnum):
     PAYMENT_CRYPTO_RETURN_URL = "payment.crypto.return_url"
     PAYMENT_CRYPTO_CALLBACK_URL = "payment.crypto.callback_url"
     PAYMENT_CRYPTO_CALLBACK_SECRET = "payment.crypto.callback_secret"
+    ORDER_TIMELINE_STATUSES = "orders.timeline.statuses"
     ALERT_ORDER_PAYMENT = "alerts.order.payment"
     ALERT_ORDER_CANCELLED = "alerts.order.cancelled"
     ALERT_ORDER_EXPIRED = "alerts.order.expired"

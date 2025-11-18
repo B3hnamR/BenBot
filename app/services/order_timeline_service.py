@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.db.models import Order, OrderTimeline
 from app.infrastructure.db.repositories.order_timeline import OrderTimelineRepository
+from app.services.timeline_status_service import TimelineStatusRegistry
 
 
 class OrderTimelineService:
@@ -67,4 +68,7 @@ class OrderTimelineService:
     def label_for_status(cls, status: str | None) -> str:
         if not status:
             return "Update"
+        custom_label = TimelineStatusRegistry.label(status)
+        if custom_label:
+            return custom_label
         return cls.DEFAULT_LABELS.get(status, status.replace("_", " ").title())

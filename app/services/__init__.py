@@ -7,6 +7,7 @@ from .recommendation_service import RecommendationService
 from .referral_service import ReferralService
 from .order_timeline_service import OrderTimelineService
 from .order_status_notifier import notify_user_status
+from .timeline_status_service import TimelineStatusRegistry, TimelineStatusService
 from .support_service import SupportService, TicketFilters
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "ReferralService",
     "OrderTimelineService",
     "notify_user_status",
+    "TimelineStatusRegistry",
+    "TimelineStatusService",
     "SupportService",
     "TicketFilters",
 ]

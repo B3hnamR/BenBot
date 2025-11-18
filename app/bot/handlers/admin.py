@@ -25,6 +25,15 @@ from app.bot.keyboards.admin import (
     ADMIN_ORDER_TIMELINE_STATUS_PREFIX,
     ADMIN_ORDER_TIMELINE_NOTE_PREFIX,
     ADMIN_ORDER_TIMELINE_FILTER_PREFIX,
+    ADMIN_TIMELINE_CFG_ADD,
+    ADMIN_TIMELINE_CFG_RESET,
+    ADMIN_TIMELINE_CFG_EDIT_PREFIX,
+    ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX,
+    ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX,
+    ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX,
+    ADMIN_TIMELINE_CFG_LABEL_PREFIX,
+    ADMIN_TIMELINE_CFG_MESSAGE_PREFIX,
+    ADMIN_TIMELINE_CFG_DELETE_PREFIX,
     admin_menu_keyboard,
     crypto_settings_keyboard,
     order_manage_keyboard,
@@ -33,6 +42,8 @@ from app.bot.keyboards.admin import (
     order_timeline_menu_keyboard,
     order_timeline_filters_keyboard,
     order_timeline_filtered_orders_keyboard,
+    timeline_status_detail_keyboard,
+    timeline_statuses_keyboard,
     loyalty_settings_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
@@ -54,11 +65,23 @@ from app.services.order_service import OrderService
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
 from app.services.order_status_notifier import notify_user_status
+from app.services.timeline_status_service import (
+    TimelineStatusDefinition,
+    TimelineStatusRegistry,
+    TimelineStatusService,
+)
 
 router = Router(name="admin")
 
 RECENT_ORDERS_PAGE_SIZE = 10
 TIMELINE_FILTER_LIMIT = 10
+TEXT_CANCEL_TOKENS = {"/cancel", "cancel", "exit", "abort"}
+TEXT_CLEAR_TOKENS = {"/clear", "clear"}
+TIMELINE_FLAG_LABELS = {
+    "notify_user": "User notifications",
+    "show_in_menu": "Timeline menu visibility",
+    "show_in_filters": "Timeline filters visibility",
+}
 
 LEGACY_ADMIN_ORDER_TIMELINE_MENU_PREFIX = "admin:orders:timeline_menu:"
 LEGACY_ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "admin:orders:timeline_status:"
@@ -213,6 +236,313 @@ async def handle_admin_order_timeline_filters(callback: CallbackQuery, session: 
     await callback.answer()
 
 
+@router.callback_query(F.data == AdminOrderCallback.TIMELINE_STATUSES.value)
+async def handle_admin_timeline_statuses(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await _remember_status_message_context(state, callback.message)
+    await state.set_state(None)
+    await _render_timeline_statuses_overview(callback.message, session, state=state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == ADMIN_TIMELINE_CFG_RESET)
+async def handle_admin_timeline_status_reset(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    service = TimelineStatusService(session)
+    await service.reset_defaults()
+    await _render_timeline_statuses_overview(
+        callback.message,
+        session,
+        state=state,
+        notice="Timeline statuses reset to defaults.",
+    )
+    await callback.answer("Timeline statuses reset.")
+
+
+@router.callback_query(F.data == ADMIN_TIMELINE_CFG_ADD)
+async def handle_admin_timeline_status_add_prompt(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await _remember_status_message_context(state, callback.message)
+    await state.set_state(AdminOrderTimelineState.add_status)
+    await _render_timeline_statuses_overview(
+        callback.message,
+        session,
+        state=state,
+        notice="Send the new status as <code>key|Label</code> (label optional).",
+    )
+    await callback.answer("Awaiting status details...")
+
+
+@router.message(AdminOrderTimelineState.add_status)
+async def handle_admin_timeline_status_add_input(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Please send the status key, optionally followed by a pipe and label.")
+        return
+    if text.lower() in TEXT_CANCEL_TOKENS:
+        await _render_timeline_statuses_overview(
+            None,
+            session,
+            state=state,
+            bot=message.bot,
+            notice="Timeline status creation cancelled.",
+        )
+        await state.set_state(None)
+        await message.answer("Creation cancelled.")
+        return
+    parts = [part.strip() for part in text.split("|", 1)]
+    key = parts[0]
+    label = parts[1] if len(parts) > 1 else key
+    service = TimelineStatusService(session)
+    try:
+        await service.add_status(key, label=label)
+    except ValueError as exc:
+        await message.answer(f"Could not add status: {exc}")
+        return
+    await _render_timeline_statuses_overview(
+        None,
+        session,
+        state=state,
+        bot=message.bot,
+        notice="Timeline status added.",
+    )
+    await state.set_state(None)
+    await message.answer("Status saved.")
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_EDIT_PREFIX))
+async def handle_admin_timeline_status_edit_menu(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    key = callback.data.removeprefix(ADMIN_TIMELINE_CFG_EDIT_PREFIX)
+    service = TimelineStatusService(session)
+    statuses = await service.list_statuses()
+    status = next((entry for entry in statuses if entry.key == key), None)
+    if status is None:
+        await callback.answer("Status not found.", show_alert=True)
+        return
+    await _remember_status_message_context(state, callback.message)
+    await state.update_data(timeline_status_target=key)
+    await _render_timeline_status_detail(
+        callback.message,
+        status,
+        state=state,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX))
+async def handle_admin_timeline_status_toggle_notify(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await _toggle_timeline_status_flag(
+        callback,
+        session,
+        state,
+        prefix=ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX,
+        field="notify_user",
+    )
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX))
+async def handle_admin_timeline_status_toggle_menu(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await _toggle_timeline_status_flag(
+        callback,
+        session,
+        state,
+        prefix=ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX,
+        field="show_in_menu",
+    )
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX))
+async def handle_admin_timeline_status_toggle_filter(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await _toggle_timeline_status_flag(
+        callback,
+        session,
+        state,
+        prefix=ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX,
+        field="show_in_filters",
+    )
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_DELETE_PREFIX))
+async def handle_admin_timeline_status_delete(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    key = callback.data.removeprefix(ADMIN_TIMELINE_CFG_DELETE_PREFIX)
+    service = TimelineStatusService(session)
+    try:
+        await service.delete_status(key)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.update_data(timeline_status_target=None)
+    await _render_timeline_statuses_overview(
+        callback.message,
+        session,
+        state=state,
+        notice="Timeline status removed.",
+    )
+    await callback.answer("Status removed.")
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_LABEL_PREFIX))
+async def handle_admin_timeline_status_rename_prompt(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    key = callback.data.removeprefix(ADMIN_TIMELINE_CFG_LABEL_PREFIX)
+    service = TimelineStatusService(session)
+    statuses = await service.list_statuses()
+    status = next((entry for entry in statuses if entry.key == key), None)
+    if status is None:
+        await callback.answer("Status not found.", show_alert=True)
+        return
+    await _remember_status_message_context(state, callback.message)
+    await state.update_data(timeline_status_target=key)
+    await state.set_state(AdminOrderTimelineState.rename_status)
+    await _render_timeline_status_detail(
+        callback.message,
+        status,
+        state=state,
+        notice="Send the new label text or /cancel to abort.",
+    )
+    await callback.answer("Waiting for label...")
+
+
+@router.message(AdminOrderTimelineState.rename_status)
+async def handle_admin_timeline_status_rename_input(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    key = data.get("timeline_status_target")
+    if not key:
+        await message.answer("Context expired. Reopen the status editor.")
+        await state.set_state(None)
+        return
+    if text.lower() in TEXT_CANCEL_TOKENS:
+        await _reopen_status_detail(session, state, message.bot, notice="Rename cancelled.")
+        await state.set_state(None)
+        await message.answer("Rename cancelled.")
+        return
+    service = TimelineStatusService(session)
+    try:
+        updated = await service.update_status(key, label=text)
+    except ValueError as exc:
+        await message.answer(f"Could not update status: {exc}")
+        return
+    await state.set_state(None)
+    await _render_timeline_status_detail(
+        None,
+        updated,
+        state=state,
+        bot=message.bot,
+        notice="Label updated.",
+    )
+    await message.answer("Label saved.")
+
+
+@router.callback_query(F.data.startswith(ADMIN_TIMELINE_CFG_MESSAGE_PREFIX))
+async def handle_admin_timeline_status_message_prompt(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    key = callback.data.removeprefix(ADMIN_TIMELINE_CFG_MESSAGE_PREFIX)
+    service = TimelineStatusService(session)
+    statuses = await service.list_statuses()
+    status = next((entry for entry in statuses if entry.key == key), None)
+    if status is None:
+        await callback.answer("Status not found.", show_alert=True)
+        return
+    await _remember_status_message_context(state, callback.message)
+    await state.update_data(timeline_status_target=key)
+    await state.set_state(AdminOrderTimelineState.edit_status_message)
+    notice = (
+        "Send the user-facing message template.\n"
+        "Use /clear to remove the template or /cancel to abort."
+    )
+    await _render_timeline_status_detail(
+        callback.message,
+        status,
+        state=state,
+        notice=notice,
+    )
+    await callback.answer("Waiting for message...")
+
+
+@router.message(AdminOrderTimelineState.edit_status_message)
+async def handle_admin_timeline_status_message_input(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    key = data.get("timeline_status_target")
+    if not key:
+        await message.answer("Context expired. Reopen the status editor.")
+        await state.set_state(None)
+        return
+    lower = text.lower()
+    if lower in TEXT_CANCEL_TOKENS:
+        await _reopen_status_detail(session, state, message.bot, notice="Message edit cancelled.")
+        await state.set_state(None)
+        await message.answer("Update cancelled.")
+        return
+    user_message: str | None = text
+    if lower in TEXT_CLEAR_TOKENS:
+        user_message = None
+    service = TimelineStatusService(session)
+    try:
+        updated = await service.update_status(key, user_message=user_message)
+    except ValueError as exc:
+        await message.answer(f"Could not update status: {exc}")
+        return
+    await state.set_state(None)
+    notice = "Message template cleared." if user_message is None else "Message template saved."
+    await _render_timeline_status_detail(
+        None,
+        updated,
+        state=state,
+        bot=message.bot,
+        notice=notice,
+    )
+    await message.answer("Template updated.")
+
+
 @router.callback_query(F.data.startswith(ADMIN_ORDER_TIMELINE_FILTER_PREFIX))
 async def handle_admin_order_timeline_filter_select(callback: CallbackQuery, session: AsyncSession) -> None:
     status_key = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_FILTER_PREFIX)
@@ -317,6 +647,10 @@ async def handle_admin_order_timeline_status(
     timeline_service = OrderTimelineService(session)
     notice_text: str
     answer_text = "Timeline updated."
+    status_def = TimelineStatusRegistry.get(status_key)
+    if status_key != "cancelled" and status_def is None:
+        await callback.answer("Status is no longer available.", show_alert=True)
+        return
     if status_key == "cancelled":
         if order.status != OrderStatus.CANCELLED:
             reason = "admin_timeline_cancelled"
@@ -329,15 +663,17 @@ async def handle_admin_order_timeline_status(
             await notifications.notify_cancelled(callback.bot, order, reason=reason)
             notice_text = "Order cancelled and recorded on the timeline."
             answer_text = "Order cancelled."
+            if status_def and status_def.notify_user:
+                await notify_user_status(callback.bot, order, status_key)
         else:
             notice_text = "Order already cancelled."
             answer_text = "Order already cancelled."
     else:
-        label = OrderTimelineService.label_for_status(status_key)
+        label = status_def.label if status_def else OrderTimelineService.label_for_status(status_key)
         await timeline_service.add_event(order, status=status_key, actor=actor)
         notice_text = f"{label} recorded on timeline."
         answer_text = f"{label} logged."
-        if status_key in {"processing", "shipping", "delivered"}:
+        if status_def and status_def.notify_user:
             await notify_user_status(callback.bot, order, status_key)
 
     if callback.message:
@@ -383,7 +719,7 @@ async def handle_admin_order_timeline_note_prompt(
         notice="Send the note text to append it to the timeline. Use /cancel to abort.",
         reply_markup_override=_timeline_keyboard,
     )
-    await callback.answer("Waiting for note text…")
+    await callback.answer("Waiting for note text...")
 
 
 @router.message(AdminOrderTimelineState.add_note)
@@ -1261,7 +1597,8 @@ async def _render_timeline_filters_message(
 ) -> None:
     base_text = "<b>Timeline filters</b>\nPick a status below to review matching orders."
     text = f"{notice}\n\n{base_text}" if notice else base_text
-    markup = order_timeline_filters_keyboard()
+    statuses = TimelineStatusRegistry.show_in_filters()
+    markup = order_timeline_filters_keyboard(statuses=statuses)
     try:
         await message.edit_text(text, reply_markup=markup)
     except Exception:
@@ -1290,6 +1627,198 @@ async def _render_timeline_filtered_orders_message(
         await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except Exception:
         await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+
+
+async def _remember_status_message_context(state: FSMContext, message: Message | None) -> None:
+    if message is None:
+        return
+    await state.update_data(
+        timeline_status_message_chat_id=message.chat.id,
+        timeline_status_message_id=message.message_id,
+    )
+
+
+async def _render_timeline_statuses_overview(
+    message: Message | None,
+    session: AsyncSession,
+    *,
+    state: FSMContext,
+    notice: str | None = None,
+    bot=None,
+) -> None:
+    service = TimelineStatusService(session)
+    statuses = await service.list_statuses()
+    text = _format_timeline_statuses_text(statuses)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = timeline_statuses_keyboard(statuses)
+    await _edit_or_send_status_message(message, text, markup, state=state, bot=bot)
+
+
+async def _render_timeline_status_detail(
+    message: Message | None,
+    status: TimelineStatusDefinition,
+    *,
+    state: FSMContext,
+    notice: str | None = None,
+    bot=None,
+) -> None:
+    text = _format_timeline_status_detail_text(status)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = timeline_status_detail_keyboard(status)
+    await _edit_or_send_status_message(message, text, markup, state=state, bot=bot)
+
+
+async def _edit_or_send_status_message(
+    message: Message | None,
+    text: str,
+    markup: InlineKeyboardMarkup,
+    *,
+    state: FSMContext,
+    bot=None,
+) -> None:
+    if message is not None:
+        try:
+            await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+        return
+    if bot is None:
+        return
+    data = await state.get_data()
+    chat_id = data.get("timeline_status_message_chat_id")
+    message_id = data.get("timeline_status_message_id")
+    if not chat_id or not message_id:
+        return
+    try:
+        await bot.edit_message_text(
+            text,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        sent = await bot.send_message(
+            chat_id,
+            text,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+        await state.update_data(
+            timeline_status_message_chat_id=sent.chat.id,
+            timeline_status_message_id=sent.message_id,
+        )
+
+
+def _format_timeline_statuses_text(statuses: Sequence[TimelineStatusDefinition]) -> str:
+    lines = [
+        "<b>Timeline statuses</b>",
+        "These statuses drive the admin timeline menu, filters, and user notifications.",
+    ]
+    if not statuses:
+        lines.append("")
+        lines.append("No statuses configured. Use the buttons below to add one.")
+        return "\n".join(lines)
+    for idx, status in enumerate(statuses, start=1):
+        flags: list[str] = []
+        if status.notify_user:
+            flags.append("notify")
+        if status.show_in_menu:
+            flags.append("menu")
+        if status.show_in_filters:
+            flags.append("filter")
+        if status.locked:
+            flags.append("locked")
+        flag_text = f" [{' / '.join(flags)}]" if flags else ""
+        lines.append(f"{idx}. {status.label} (<code>{status.key}</code>){flag_text}")
+        if status.user_message:
+            lines.append("   User notification template set.")
+    lines.append("")
+    lines.append("Tap a status to edit or add a new entry.")
+    return "\n".join(lines)
+
+
+def _format_timeline_status_detail_text(status: TimelineStatusDefinition) -> str:
+    flags = [
+        f"Notify user: {'yes' if status.notify_user else 'no'}",
+        f"In timeline menu: {'yes' if status.show_in_menu else 'no'}",
+        f"Visible in filters: {'yes' if status.show_in_filters else 'no'}",
+        f"Locked: {'yes' if status.locked else 'no'}",
+    ]
+    lines = [
+        "<b>Timeline status</b>",
+        f"Key: <code>{status.key}</code>",
+        f"Label: {status.label}",
+        *flags,
+    ]
+    if status.user_message:
+        lines.append("")
+        lines.append("<b>User message</b>")
+        lines.append(status.user_message)
+    else:
+        lines.append("")
+        lines.append("User message: not set (fallback text will be used).")
+    return "\n".join(lines)
+
+
+async def _toggle_timeline_status_flag(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    *,
+    prefix: str,
+    field: str,
+) -> None:
+    key = callback.data.removeprefix(prefix)
+    service = TimelineStatusService(session)
+    statuses = await service.list_statuses()
+    status = next((entry for entry in statuses if entry.key == key), None)
+    if status is None:
+        await callback.answer("Status not found.", show_alert=True)
+        return
+    await _remember_status_message_context(state, callback.message)
+    new_value = not getattr(status, field, False)
+    try:
+        updated = await service.update_status(key, **{field: new_value})
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    label = TIMELINE_FLAG_LABELS.get(field, field.replace("_", " ").title())
+    notice = f"{label} {'enabled' if getattr(updated, field) else 'disabled'}."
+    await _render_timeline_status_detail(
+        callback.message,
+        updated,
+        state=state,
+        notice=notice,
+    )
+    await callback.answer("Status updated.")
+
+
+async def _reopen_status_detail(
+    session: AsyncSession,
+    state: FSMContext,
+    bot,
+    *,
+    notice: str | None = None,
+) -> None:
+    data = await state.get_data()
+    key = data.get("timeline_status_target")
+    if not key or bot is None:
+        return
+    service = TimelineStatusService(session)
+    statuses = await service.list_statuses()
+    status = next((entry for entry in statuses if entry.key == key), None)
+    if status is None:
+        return
+    await _render_timeline_status_detail(
+        None,
+        status,
+        state=state,
+        bot=bot,
+        notice=notice,
+    )
 
 
 async def _render_admin_order_detail(

@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.enums import CouponStatus, OrderStatus
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
+from app.services.timeline_status_service import TimelineStatusDefinition, TimelineStatusRegistry
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
@@ -53,6 +54,7 @@ class AdminOrderCallback(StrEnum):
     TOGGLE_EXPIRE_ALERT = "admin:orders:toggle_expire"
     VIEW_RECENT = "admin:orders:view_recent"
     TIMELINE_FILTERS = "admin:orders:timeline_filters"
+    TIMELINE_STATUSES = "admin:orders:timeline_statuses"
     BACK = "admin:orders:back"
 
 
@@ -84,6 +86,15 @@ ADMIN_ORDER_TIMELINE_MENU_PREFIX = "ao:tlm:"
 ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "ao:tls:"
 ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "ao:tln:"
 ADMIN_ORDER_TIMELINE_FILTER_PREFIX = "ao:tlf:"
+ADMIN_TIMELINE_CFG_ADD = "admin:orders:tlcfg:add"
+ADMIN_TIMELINE_CFG_RESET = "admin:orders:tlcfg:reset"
+ADMIN_TIMELINE_CFG_EDIT_PREFIX = "admin:orders:tlcfg:edit:"
+ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX = "admin:orders:tlcfg:notify:"
+ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX = "admin:orders:tlcfg:menu:"
+ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX = "admin:orders:tlcfg:filter:"
+ADMIN_TIMELINE_CFG_LABEL_PREFIX = "admin:orders:tlcfg:label:"
+ADMIN_TIMELINE_CFG_MESSAGE_PREFIX = "admin:orders:tlcfg:message:"
+ADMIN_TIMELINE_CFG_DELETE_PREFIX = "admin:orders:tlcfg:delete:"
 ADMIN_COUPON_EDIT_MENU_PREFIX = "admin:coupon:editmenu:"
 ADMIN_COUPON_EDIT_FIELD_PREFIX = "admin:coupon:edit:"
 ADMIN_COUPON_USAGE_PREFIX = "admin:coupon:usage:"
@@ -207,6 +218,10 @@ def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyb
     builder.button(
         text="Timeline filters",
         callback_data=AdminOrderCallback.TIMELINE_FILTERS.value,
+    )
+    builder.button(
+        text="Timeline statuses",
+        callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
     )
     builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
     builder.adjust(1)
@@ -448,32 +463,30 @@ def order_timeline_menu_keyboard(
     order: "Order",
     *,
     timeline: Sequence["OrderTimeline"] | None = None,
+    statuses: Sequence[TimelineStatusDefinition] | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     public_id = order.public_id
     events = list(timeline or getattr(order, "timelines", []) or [])
+    options = list(statuses or TimelineStatusRegistry.show_in_menu())
     delivered_recorded = any(
         getattr(entry, "event_type", None) == "status"
         and getattr(entry, "status", None) == "delivered"
         for entry in events
     )
-    builder.button(
-        text="Processing",
-        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}processing:{public_id}",
-    )
-    builder.button(
-        text="Shipping",
-        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}shipping:{public_id}",
-    )
-    if not delivered_recorded:
+    if options:
+        for status in options:
+            if status.key == "delivered" and delivered_recorded:
+                continue
+            builder.button(
+                text=status.label,
+                callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}{status.key}:{public_id}",
+            )
+    else:
         builder.button(
-            text="Delivered",
-            callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}delivered:{public_id}",
+            text="Configure statuses",
+            callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
         )
-    builder.button(
-        text="Cancelled",
-        callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}cancelled:{public_id}",
-    )
     builder.button(
         text="Add note",
         callback_data=f"{ADMIN_ORDER_TIMELINE_NOTE_PREFIX}{public_id}",
@@ -496,18 +509,20 @@ def order_timeline_menu_keyboard(
     return builder.as_markup()
 
 
-def order_timeline_filters_keyboard() -> InlineKeyboardMarkup:
+def order_timeline_filters_keyboard(
+    statuses: Sequence[TimelineStatusDefinition] | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    options = [
-        ("Processing", "processing"),
-        ("Shipping", "shipping"),
-        ("Delivered", "delivered"),
-        ("Cancelled", "cancelled"),
-    ]
-    for label, key in options:
+    options = list(statuses or TimelineStatusRegistry.show_in_filters())
+    if not options:
         builder.button(
-            text=label,
-            callback_data=f"{ADMIN_ORDER_TIMELINE_FILTER_PREFIX}{key}",
+            text="Configure timeline statuses",
+            callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
+        )
+    for status in options:
+        builder.button(
+            text=status.label,
+            callback_data=f"{ADMIN_ORDER_TIMELINE_FILTER_PREFIX}{status.key}",
         )
     builder.button(
         text="Back to orders",
@@ -543,6 +558,64 @@ def order_timeline_filtered_orders_keyboard(
     builder.button(
         text="Back to orders",
         callback_data=AdminMenuCallback.MANAGE_ORDERS.value,
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def timeline_statuses_keyboard(
+    statuses: Sequence[TimelineStatusDefinition],
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if statuses:
+        for status in statuses:
+            suffix = " *notify" if status.notify_user else ""
+            builder.button(
+                text=f"{status.label} ({status.key}){suffix}",
+                callback_data=f"{ADMIN_TIMELINE_CFG_EDIT_PREFIX}{status.key}",
+            )
+    else:
+        builder.button(
+            text="No statuses configured",
+            callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
+        )
+    builder.button(text="Add status", callback_data=ADMIN_TIMELINE_CFG_ADD)
+    builder.button(text="Reset to defaults", callback_data=ADMIN_TIMELINE_CFG_RESET)
+    builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def timeline_status_detail_keyboard(status: TimelineStatusDefinition) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"Notify user: {'ON' if status.notify_user else 'OFF'}",
+        callback_data=f"{ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX}{status.key}",
+    )
+    builder.button(
+        text=f"In timeline menu: {'YES' if status.show_in_menu else 'NO'}",
+        callback_data=f"{ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX}{status.key}",
+    )
+    builder.button(
+        text=f"Show in filters: {'YES' if status.show_in_filters else 'NO'}",
+        callback_data=f"{ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX}{status.key}",
+    )
+    builder.button(
+        text="Rename label",
+        callback_data=f"{ADMIN_TIMELINE_CFG_LABEL_PREFIX}{status.key}",
+    )
+    builder.button(
+        text="Edit user message",
+        callback_data=f"{ADMIN_TIMELINE_CFG_MESSAGE_PREFIX}{status.key}",
+    )
+    if not status.locked:
+        builder.button(
+            text="Delete status",
+            callback_data=f"{ADMIN_TIMELINE_CFG_DELETE_PREFIX}{status.key}",
+        )
+    builder.button(
+        text="Back to list",
+        callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
     )
     builder.adjust(1)
     return builder.as_markup()
