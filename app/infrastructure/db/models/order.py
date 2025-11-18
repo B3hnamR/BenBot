@@ -52,13 +52,13 @@ class Order(IntPKMixin, TimestampMixin, Base):
         order_by="OrderTimeline.created_at",
         cascade="all, delete-orphan",
     )
-    fulfillment_task: Mapped["OrderFulfillmentTask" | None] = relationship(
+    fulfillment_task: Mapped["OrderFulfillmentTask | None"] = relationship(
         "OrderFulfillmentTask",
         back_populates="order",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    feedback: Mapped["OrderFeedback" | None] = relationship(
+    feedback: Mapped["OrderFeedback | None"] = relationship(
         "OrderFeedback",
         back_populates="order",
         uselist=False,
