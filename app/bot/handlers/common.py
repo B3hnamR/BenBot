@@ -16,21 +16,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.keyboards.orders import (
     ORDER_CANCEL_ORDER_PREFIX,
+    ORDER_FEEDBACK_RATE_PREFIX,
+    ORDER_FEEDBACK_START_PREFIX,
     ORDER_LIST_BACK_CALLBACK,
     ORDER_LIST_PAGE_PREFIX,
     ORDER_REISSUE_PREFIX,
     ORDER_VIEW_PREFIX,
     order_details_keyboard,
+    order_feedback_rating_keyboard,
     orders_list_keyboard,
 )
 from app.bot.keyboards.subscription import (
     SUBSCRIPTION_REFRESH_CALLBACK,
     build_subscription_keyboard,
 )
+from app.bot.states.order_feedback import OrderFeedbackState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order, OrderTimeline
 from app.infrastructure.db.repositories import (
+    OrderRepository,
     RequiredChannelRepository,
     SupportRepository,
     UserRepository,
@@ -39,8 +44,9 @@ from app.services.container import membership_service
 from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
 from app.services.referral_service import ReferralService
-from app.services.order_service import OrderService
+from app.services.order_feedback_service import OrderFeedbackService
 from app.services.order_notification_service import OrderNotificationService
+from app.services.order_service import OrderService
 from app.services.order_timeline_service import OrderTimelineService
 from app.services.crypto_payment_service import (
     CryptoPaymentService,
@@ -52,6 +58,7 @@ from app.services.loyalty_order_service import refund_loyalty_for_order
 from app.services.referral_order_service import cancel_referral_for_order
 
 router = Router(name="common")
+FEEDBACK_CANCEL_TOKENS = {"/cancel", "cancel", "exit"}
 
 
 @router.message(CommandStart())
@@ -332,6 +339,109 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession, stat
     )
 
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ORDER_FEEDBACK_START_PREFIX))
+async def handle_order_feedback_start(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    public_id = callback.data.removeprefix(ORDER_FEEDBACK_START_PREFIX)
+    user_repo = UserRepository(session)
+    profile = await user_repo.get_by_telegram_id(callback.from_user.id)
+    if profile is None:
+        await callback.answer("Profile not found.", show_alert=True)
+        return
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None or order.user_id != profile.id:
+        await callback.answer("Order not found.", show_alert=True)
+        return
+    snapshot = (order.extra_attrs or {}).get("timeline_status") or {}
+    status_key = snapshot.get("status")
+    if status_key != "delivered":
+        await callback.answer("Feedback is available after delivery.", show_alert=True)
+        return
+    feedback_service = OrderFeedbackService(session)
+    if await feedback_service.has_feedback(order):
+        await callback.answer("Feedback already recorded.", show_alert=True)
+        return
+    await state.update_data(feedback_order_id=order.id, feedback_rating=None)
+    await callback.message.edit_text(
+        "Please rate this order from 1 to 5.",
+        reply_markup=order_feedback_rating_keyboard(public_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ORDER_FEEDBACK_RATE_PREFIX))
+async def handle_order_feedback_rate(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    raw = callback.data.removeprefix(ORDER_FEEDBACK_RATE_PREFIX)
+    try:
+        public_id, rating_raw = raw.split(":", 1)
+        rating = int(rating_raw)
+    except (ValueError, AttributeError):
+        await callback.answer("Invalid rating.", show_alert=True)
+        return
+    if rating < 1 or rating > 5:
+        await callback.answer("Rating must be between 1 and 5.", show_alert=True)
+        return
+    user_repo = UserRepository(session)
+    profile = await user_repo.get_by_telegram_id(callback.from_user.id)
+    if profile is None:
+        await callback.answer("Profile not found.", show_alert=True)
+        return
+    order_service = OrderService(session)
+    order = await order_service.get_order_by_public_id(public_id)
+    if order is None or order.user_id != profile.id:
+        await callback.answer("Order not found.", show_alert=True)
+        return
+    feedback_service = OrderFeedbackService(session)
+    await feedback_service.create_feedback(order, user_id=profile.id, rating=rating)
+    await state.update_data(feedback_order_id=order.id, feedback_rating=rating)
+    await state.set_state(OrderFeedbackState.waiting_comment)
+    await callback.message.edit_text(
+        "Thanks! Send an optional comment or /skip to finish."
+    )
+    await callback.answer()
+
+
+@router.message(OrderFeedbackState.waiting_comment)
+async def handle_order_feedback_comment(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    order_id = data.get("feedback_order_id")
+    rating = data.get("feedback_rating")
+    if not order_id or rating is None:
+        await message.answer("Feedback context expired. Start again.")
+        await state.set_state(None)
+        return
+    comment: str | None = None
+    lower = text.lower()
+    if lower in {"/skip"}:
+        comment = None
+    elif lower in FEEDBACK_CANCEL_TOKENS:
+        await state.set_state(None)
+        await message.answer("Feedback cancelled.")
+        return
+    else:
+        comment = text
+
+    order_repo = OrderRepository(session)
+    order = await order_repo.get_by_id(order_id)
+    if order is None:
+        await message.answer("Order not found. Feedback cancelled.")
+        await state.set_state(None)
+        return
+    feedback_service = OrderFeedbackService(session)
+    await feedback_service.create_feedback(order, user_id=order.user_id, rating=rating, comment=comment)
+    await state.set_state(None)
+    await message.answer("Thank you for your feedback!")
 
 
 @router.callback_query(F.data.startswith(ORDER_CANCEL_ORDER_PREFIX))

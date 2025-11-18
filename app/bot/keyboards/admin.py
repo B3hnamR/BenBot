@@ -12,7 +12,7 @@ from app.services.timeline_status_service import TimelineStatusDefinition, Timel
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
-    from app.infrastructure.db.models import Coupon, Order, OrderTimeline
+    from app.infrastructure.db.models import AdminActionLog, Order, OrderFulfillmentTask, OrderTimeline
 
 
 class AdminMenuCallback(StrEnum):
@@ -55,6 +55,9 @@ class AdminOrderCallback(StrEnum):
     VIEW_RECENT = "admin:orders:view_recent"
     TIMELINE_FILTERS = "admin:orders:timeline_filters"
     TIMELINE_STATUSES = "admin:orders:timeline_statuses"
+    SEARCH = "admin:orders:search"
+    FULFILLMENT_TASKS = "admin:orders:fulfillment_tasks"
+    ACTION_LOGS = "admin:orders:action_logs"
     BACK = "admin:orders:back"
 
 
@@ -86,6 +89,8 @@ ADMIN_ORDER_TIMELINE_MENU_PREFIX = "ao:tlm:"
 ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "ao:tls:"
 ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "ao:tln:"
 ADMIN_ORDER_TIMELINE_FILTER_PREFIX = "ao:tlf:"
+ADMIN_FULFILLMENT_RETRY_PREFIX = "admin:orders:ft_retry:"
+ADMIN_FULFILLMENT_DISMISS_PREFIX = "admin:orders:ft_dismiss:"
 ADMIN_TIMELINE_CFG_ADD = "admin:orders:tlcfg:add"
 ADMIN_TIMELINE_CFG_RESET = "admin:orders:tlcfg:reset"
 ADMIN_TIMELINE_CFG_EDIT_PREFIX = "admin:orders:tlcfg:edit:"
@@ -222,6 +227,18 @@ def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyb
     builder.button(
         text="Timeline statuses",
         callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
+    )
+    builder.button(
+        text="Search orders",
+        callback_data=AdminOrderCallback.SEARCH.value,
+    )
+    builder.button(
+        text="Fulfillment queue",
+        callback_data=AdminOrderCallback.FULFILLMENT_TASKS.value,
+    )
+    builder.button(
+        text="Admin activity log",
+        callback_data=AdminOrderCallback.ACTION_LOGS.value,
     )
     builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
     builder.adjust(1)
@@ -612,6 +629,44 @@ def timeline_status_detail_keyboard(status: TimelineStatusDefinition) -> InlineK
     builder.button(
         text="Back to list",
         callback_data=AdminOrderCallback.TIMELINE_STATUSES.value,
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def fulfillment_tasks_keyboard(tasks: Sequence["OrderFulfillmentTask"]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for task in tasks:
+        order = task.order
+        public_id = getattr(order, "public_id", "?")
+        builder.button(
+            text=f"Retry {public_id}",
+            callback_data=f"{ADMIN_FULFILLMENT_RETRY_PREFIX}{task.id}",
+        )
+        builder.button(
+            text=f"Dismiss {public_id}",
+            callback_data=f"{ADMIN_FULFILLMENT_DISMISS_PREFIX}{task.id}",
+        )
+    builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_search_results_keyboard(orders: Sequence["Order"], *, query: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        label = getattr(order.product, "name", "") or "Order"
+        builder.button(
+            text=f"{label[:32]} ({order.public_id})",
+            callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
+        )
+    builder.button(
+        text="New search",
+        callback_data=AdminOrderCallback.SEARCH.value,
+    )
+    builder.button(
+        text="Back to orders",
+        callback_data=AdminMenuCallback.MANAGE_ORDERS.value,
     )
     builder.adjust(1)
     return builder.as_markup()

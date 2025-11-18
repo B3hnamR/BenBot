@@ -12,6 +12,8 @@ from app.infrastructure.db.models import Order
 from app.infrastructure.db.repositories.order import OrderRepository
 from app.services.crypto_payment_service import OXAPAY_EXTRA_KEY
 from app.services.fulfillment_service import FulfillmentService
+from app.services.fulfillment_task_service import FulfillmentTaskService
+from app.services.order_feedback_service import OrderFeedbackService
 from app.services.order_notification_service import OrderNotificationService
 from app.services.coupon_order_service import finalize_coupon_on_paid
 from app.services.referral_order_service import finalize_referral_on_paid
@@ -65,66 +67,88 @@ async def ensure_fulfillment(
     if user is None or user.telegram_id is None:
         return False
 
+    task_service = FulfillmentTaskService(session)
+    feedback_service = OrderFeedbackService(session)
     inventory_update = await _apply_inventory_adjustment(order)
 
     await TimelineStatusService(session).refresh_registry()
     fulfillment_service = FulfillmentService(session)
-    action_result = await fulfillment_service.execute(order, bot)
-
-    status_note = _build_shipping_note(order, inventory_update, action_result)
-
     timeline_service = OrderTimelineService(session)
-    existing_events = await timeline_service.list_events(order)
-    has_shipping_event = any(
-        getattr(entry, "event_type", None) == "status"
-        and getattr(entry, "status", None) == "shipping"
-        for entry in existing_events
-    )
-    if not has_shipping_event:
+
+    try:
+        action_result = await fulfillment_service.execute(order, bot)
+        status_note = _build_shipping_note(order, inventory_update, action_result)
+
+        existing_events = await timeline_service.list_events(order)
+        has_shipping_event = any(
+            getattr(entry, "event_type", None) == "status"
+            and getattr(entry, "status", None) == "shipping"
+            for entry in existing_events
+        )
+        if not has_shipping_event:
+            await timeline_service.add_event(
+                order,
+                status="shipping",
+                note="Order is being prepared for delivery.",
+                actor=f"system:{source}",
+            )
+            if TimelineStatusRegistry.notify_enabled("shipping"):
+                await notify_user_status(bot, order, "shipping", note=status_note)
+
+        notification_extra = _inventory_admin_lines(inventory_update, action_result)
+        notifications = OrderNotificationService(session)
+        await notifications.notify_payment(
+            bot,
+            order,
+            source=source,
+            extra_lines=notification_extra,
+        )
+
+        fulfilled_at = datetime.now(tz=timezone.utc).isoformat()
+        fulfillment.update({
+            "delivered_at": fulfilled_at,
+            "delivered_by": source,
+        })
+        if inventory_update is not None:
+            fulfillment["inventory"] = inventory_update.as_meta()
+        if action_result:
+            fulfillment["actions"] = action_result.get("actions", [])
+            fulfillment["context"] = action_result.get("context", {})
+            fulfillment["success"] = action_result.get("success", False)
+        meta.update({"fulfillment": fulfillment})
+
+        await OrderRepository(session).merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: meta})
+        order.extra_attrs = order.extra_attrs or {}
+        order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
+
         await timeline_service.add_event(
             order,
-            status="shipping",
-            note="Order is being prepared for delivery.",
+            status="delivered",
+            note="Order delivered to the customer.",
             actor=f"system:{source}",
         )
-        if TimelineStatusRegistry.notify_enabled("shipping"):
-            await notify_user_status(bot, order, "shipping", note=status_note)
+        if TimelineStatusRegistry.notify_enabled("delivered"):
+            await notify_user_status(bot, order, "delivered", note=status_note)
+            meta.setdefault(
+                "delivery_notice",
+                {
+                    "sent_at": fulfilled_at,
+                    "sent_by": f"system:{source}",
+                },
+            )
 
-    notification_extra = _inventory_admin_lines(inventory_update, action_result)
-    notifications = OrderNotificationService(session)
-    await notifications.notify_payment(
-        bot,
-        order,
-        source=source,
-        extra_lines=notification_extra,
-    )
-
-    fulfilled_at = datetime.now(tz=timezone.utc).isoformat()
-    fulfillment.update({
-        "delivered_at": fulfilled_at,
-        "delivered_by": source,
-    })
-    if inventory_update is not None:
-        fulfillment["inventory"] = inventory_update.as_meta()
-    if action_result:
-        fulfillment["actions"] = action_result.get("actions", [])
-        fulfillment["context"] = action_result.get("context", {})
-        fulfillment["success"] = action_result.get("success", False)
-    meta.update({"fulfillment": fulfillment})
-
-    await OrderRepository(session).merge_extra_attrs(order, {OXAPAY_EXTRA_KEY: meta})
-    order.extra_attrs = order.extra_attrs or {}
-    order.extra_attrs[OXAPAY_EXTRA_KEY] = meta
-
-    await timeline_service.add_event(
-        order,
-        status="delivered",
-        note="Order delivered to the customer.",
-        actor=f"system:{source}",
-    )
-    if TimelineStatusRegistry.notify_enabled("delivered"):
-        await notify_user_status(bot, order, "delivered", note=status_note)
-    return True
+        await feedback_service.prompt_feedback(bot, order)
+        await task_service.clear_for_order(order)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.exception(
+            "ensure_fulfillment_failed",
+            order_id=order.id,
+            source=source,
+            error=str(exc),
+        )
+        await task_service.record_failure(order, source=source, error=str(exc))
+        return False
 
 
 async def _ensure_relationships_loaded(session: AsyncSession, order: Order) -> None:

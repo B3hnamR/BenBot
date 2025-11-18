@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import Bot
@@ -22,6 +23,7 @@ from app.services.loyalty_order_service import refund_loyalty_for_order
 from app.services.timeline_status_service import TimelineStatusService
 
 log = get_logger(__name__)
+REMINDER_THRESHOLD_MINUTES = 5
 
 
 async def poll_pending_orders(bot: Bot, *, batch_size: int = 25) -> int:
@@ -38,6 +40,7 @@ async def poll_pending_orders(bot: Bot, *, batch_size: int = 25) -> int:
         updated = 0
 
         for order in orders:
+            await _maybe_send_payment_reminder(bot, order, repo)
             previous_status = order.status
             try:
                 result = await crypto_service.refresh_order_status(order)
@@ -109,3 +112,38 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+async def _maybe_send_payment_reminder(bot: Bot, order, repo: OrderRepository) -> None:
+    if order.status != OrderStatus.AWAITING_PAYMENT:
+        return
+    expires_at = order.payment_expires_at
+    user = getattr(order, "user", None)
+    if expires_at is None or user is None or user.telegram_id is None:
+        return
+    now = datetime.now(tz=timezone.utc)
+    remaining = expires_at - now
+    if remaining <= timedelta(0) or remaining > timedelta(minutes=REMINDER_THRESHOLD_MINUTES):
+        return
+    extra = dict(order.extra_attrs or {})
+    reminders = dict(extra.get("reminders") or {})
+    reminder = reminders.get("payment_expiry")
+    if reminder and reminder.get("sent_at"):
+        return
+    message = (
+        f"Reminder: order <code>{order.public_id}</code> is awaiting payment.\n"
+        f"The invoice will expire at {expires_at:%Y-%m-%d %H:%M UTC}."
+    )
+    try:
+        await bot.send_message(user.telegram_id, message)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "payment_reminder_failed",
+            order_id=order.id,
+            error=str(exc),
+        )
+        return
+    reminders["payment_expiry"] = {"sent_at": now.isoformat()}
+    extra["reminders"] = reminders
+    await repo.merge_extra_attrs(order, {"reminders": reminders})
+    order.extra_attrs = extra

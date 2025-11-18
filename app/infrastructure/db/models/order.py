@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, JSON, Numeric, String
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, JSON, Numeric, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import OrderStatus
@@ -52,6 +52,18 @@ class Order(IntPKMixin, TimestampMixin, Base):
         order_by="OrderTimeline.created_at",
         cascade="all, delete-orphan",
     )
+    fulfillment_task: Mapped["OrderFulfillmentTask" | None] = relationship(
+        "OrderFulfillmentTask",
+        back_populates="order",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    feedback: Mapped["OrderFeedback" | None] = relationship(
+        "OrderFeedback",
+        back_populates="order",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class OrderAnswer(IntPKMixin, TimestampMixin, Base):
@@ -76,3 +88,40 @@ class OrderTimeline(IntPKMixin, TimestampMixin, Base):
     meta: Mapped[dict | None] = mapped_column(JSON())
 
     order: Mapped[Order] = relationship("Order", back_populates="timelines")
+
+
+class OrderFulfillmentTask(IntPKMixin, TimestampMixin, Base):
+    __tablename__ = "order_fulfillment_tasks"
+
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(length=32), default="failed", nullable=False)
+    source: Mapped[str | None] = mapped_column(String(length=64))
+    last_error: Mapped[str | None] = mapped_column(Text())
+    attempts: Mapped[int] = mapped_column(default=0, nullable=False)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    order: Mapped[Order] = relationship("Order", back_populates="fulfillment_task")
+
+
+class AdminActionLog(IntPKMixin, TimestampMixin, Base):
+    __tablename__ = "admin_action_logs"
+
+    admin_id: Mapped[int] = mapped_column(BigInteger(), nullable=False)
+    action: Mapped[str] = mapped_column(String(length=64), nullable=False)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"))
+    meta: Mapped[dict | None] = mapped_column(JSON())
+
+    order: Mapped[Order | None] = relationship("Order")
+
+
+class OrderFeedback(IntPKMixin, TimestampMixin, Base):
+    __tablename__ = "order_feedback"
+
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False)
+    rating: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text())
+
+    order: Mapped[Order] = relationship("Order", back_populates="feedback")
+    user: Mapped["UserProfile"] = relationship("UserProfile")

@@ -19,6 +19,8 @@ ORDER_LIST_BACK_CALLBACK = "order:list_back"
 ORDER_LIST_PAGE_PREFIX = "order:list_page:"
 ORDER_CANCEL_ORDER_PREFIX = "order:cancel_order:"
 ORDER_REISSUE_PREFIX = "order:reissue:"
+ORDER_FEEDBACK_START_PREFIX = "order:feedback:start:"
+ORDER_FEEDBACK_RATE_PREFIX = "order:feedback:rate:"
 
 
 def order_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -107,6 +109,30 @@ def order_details_keyboard(
     builder.button(text="Back to orders", callback_data=back_callback)
     builder.button(text="Back to menu", callback_data=MainMenuCallback.HOME.value)
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_feedback_prompt_keyboard(order: Order) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Leave feedback",
+        callback_data=f"{ORDER_FEEDBACK_START_PREFIX}{order.public_id}",
+    )
+    return builder.as_markup()
+
+
+def order_feedback_rating_keyboard(public_id: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for rating in range(1, 6):
+        builder.button(
+            text=str(rating),
+            callback_data=f"{ORDER_FEEDBACK_RATE_PREFIX}{public_id}:{rating}",
+        )
+    builder.adjust(5)
+    builder.button(
+        text="Back to order",
+        callback_data=f"{ORDER_VIEW_PREFIX}{public_id}",
+    )
     return builder.as_markup()
 
 

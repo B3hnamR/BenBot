@@ -6,3 +6,7 @@ class AdminOrderTimelineState(StatesGroup):
     add_status = State()
     rename_status = State()
     edit_status_message = State()
+
+
+class AdminOrderSearchState(StatesGroup):
+    waiting_query = State()

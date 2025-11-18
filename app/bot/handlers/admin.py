@@ -8,63 +8,70 @@ from typing import Any, Callable, Sequence
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.admin import (
-    AdminCryptoCallback,
-    AdminMenuCallback,
-    AdminOrderCallback,
-    AdminLoyaltyCallback,
+    ADMIN_FULFILLMENT_DISMISS_PREFIX,
+    ADMIN_FULFILLMENT_RETRY_PREFIX,
     ADMIN_ORDER_MARK_FULFILLED_PREFIX,
-    ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX,
     ADMIN_ORDER_MARK_PAID_PREFIX,
-    ADMIN_RECENT_ORDERS_PAGE_PREFIX,
+    ADMIN_ORDER_NOTIFY_DELIVERED_PREFIX,
     ADMIN_ORDER_RECEIPT_PREFIX,
-    ADMIN_ORDER_VIEW_PREFIX,
-    ADMIN_ORDER_TIMELINE_MENU_PREFIX,
-    ADMIN_ORDER_TIMELINE_STATUS_PREFIX,
-    ADMIN_ORDER_TIMELINE_NOTE_PREFIX,
     ADMIN_ORDER_TIMELINE_FILTER_PREFIX,
+    ADMIN_ORDER_TIMELINE_MENU_PREFIX,
+    ADMIN_ORDER_TIMELINE_NOTE_PREFIX,
+    ADMIN_ORDER_TIMELINE_STATUS_PREFIX,
+    ADMIN_ORDER_VIEW_PREFIX,
+    ADMIN_RECENT_ORDERS_PAGE_PREFIX,
     ADMIN_TIMELINE_CFG_ADD,
-    ADMIN_TIMELINE_CFG_RESET,
+    ADMIN_TIMELINE_CFG_DELETE_PREFIX,
     ADMIN_TIMELINE_CFG_EDIT_PREFIX,
-    ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX,
-    ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX,
-    ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX,
     ADMIN_TIMELINE_CFG_LABEL_PREFIX,
     ADMIN_TIMELINE_CFG_MESSAGE_PREFIX,
-    ADMIN_TIMELINE_CFG_DELETE_PREFIX,
+    ADMIN_TIMELINE_CFG_RESET,
+    ADMIN_TIMELINE_CFG_TOGGLE_FILTER_PREFIX,
+    ADMIN_TIMELINE_CFG_TOGGLE_MENU_PREFIX,
+    ADMIN_TIMELINE_CFG_TOGGLE_NOTIFY_PREFIX,
+    AdminCryptoCallback,
+    AdminLoyaltyCallback,
+    AdminMenuCallback,
+    AdminOrderCallback,
     admin_menu_keyboard,
     crypto_settings_keyboard,
+    fulfillment_tasks_keyboard,
+    loyalty_settings_keyboard,
     order_manage_keyboard,
+    order_search_results_keyboard,
     order_settings_keyboard,
-    recent_orders_keyboard,
-    order_timeline_menu_keyboard,
     order_timeline_filters_keyboard,
     order_timeline_filtered_orders_keyboard,
+    order_timeline_menu_keyboard,
+    recent_orders_keyboard,
     timeline_status_detail_keyboard,
     timeline_statuses_keyboard,
-    loyalty_settings_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
 from app.bot.states.admin_crypto import AdminCryptoState
 from app.bot.states.admin_loyalty import AdminLoyaltyState
-from app.bot.states.admin_order import AdminOrderTimelineState
+from app.bot.states.admin_order import AdminOrderSearchState, AdminOrderTimelineState
 from app.core.config import get_settings
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order, OrderTimeline
 from app.infrastructure.db.repositories.order import OrderRepository
+from app.services.admin_action_log_service import AdminActionLogService
 from app.services.config_service import ConfigService
-from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
-from app.services.order_fulfillment import ensure_fulfillment
 from app.services.coupon_order_service import release_coupon_for_order
-from app.services.referral_order_service import cancel_referral_for_order
-from app.services.order_notification_service import OrderNotificationService
+from app.services.crypto_payment_service import CryptoPaymentService, OXAPAY_EXTRA_KEY
+from app.services.fulfillment_task_service import FulfillmentTaskService
 from app.services.loyalty_order_service import refund_loyalty_for_order
+from app.services.order_fulfillment import ensure_fulfillment
+from app.services.order_notification_service import OrderNotificationService
 from app.services.order_service import OrderService
+from app.services.order_status_notifier import notify_user_status
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
-from app.services.order_status_notifier import notify_user_status
+from app.services.referral_order_service import cancel_referral_for_order
 from app.services.timeline_status_service import (
     TimelineStatusDefinition,
     TimelineStatusRegistry,
@@ -249,6 +256,21 @@ async def handle_admin_timeline_statuses(
     await callback.answer()
 
 
+@router.callback_query(F.data == AdminOrderCallback.SEARCH.value)
+async def handle_admin_order_search_prompt(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await state.set_state(AdminOrderSearchState.waiting_query)
+    text = "Send a search term (order ID, product name, invoice payload, or numeric user ID). Use /cancel to abort."
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        await callback.message.answer(text)
+    await callback.answer("Waiting for query...")
+
+
 @router.callback_query(F.data == ADMIN_TIMELINE_CFG_RESET)
 async def handle_admin_timeline_status_reset(
     callback: CallbackQuery,
@@ -264,6 +286,31 @@ async def handle_admin_timeline_status_reset(
         notice="Timeline statuses reset to defaults.",
     )
     await callback.answer("Timeline statuses reset.")
+
+
+@router.callback_query(F.data == AdminOrderCallback.FULFILLMENT_TASKS.value)
+async def handle_admin_fulfillment_tasks(callback: CallbackQuery, session: AsyncSession) -> None:
+    tasks = await FulfillmentTaskService(session).list_open(limit=10)
+    text = _format_fulfillment_tasks_text(tasks)
+    markup = fulfillment_tasks_keyboard(tasks)
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback.message.answer(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data == AdminOrderCallback.ACTION_LOGS.value)
+async def handle_admin_action_logs(callback: CallbackQuery, session: AsyncSession) -> None:
+    logs = await AdminActionLogService(session).list_recent(limit=20)
+    text = _format_admin_action_logs_text(logs)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Back to orders", callback_data=AdminMenuCallback.MANAGE_ORDERS.value)
+    try:
+        await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    except Exception:
+        await callback.message.answer(text, reply_markup=builder.as_markup())
+    await callback.answer()
 
 
 @router.callback_query(F.data == ADMIN_TIMELINE_CFG_ADD)
@@ -568,6 +615,68 @@ async def handle_admin_order_timeline_filter_select(callback: CallbackQuery, ses
         await callback.answer()
 
 
+@router.callback_query(F.data.startswith(ADMIN_FULFILLMENT_RETRY_PREFIX))
+async def handle_admin_fulfillment_retry(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    raw = callback.data.removeprefix(ADMIN_FULFILLMENT_RETRY_PREFIX)
+    try:
+        task_id = int(raw)
+    except ValueError:
+        await callback.answer("Invalid task.", show_alert=True)
+        return
+    service = FulfillmentTaskService(session)
+    task = await service.get_task(task_id)
+    if task is None or task.order is None:
+        await callback.answer("Task not found.", show_alert=True)
+        return
+    await session.refresh(task.order, attribute_names=["product", "user"])
+    success = await ensure_fulfillment(session, callback.bot, task.order, source="admin_retry")
+    if success:
+        notice = "Fulfillment executed successfully."
+        await callback.answer("Fulfillment executed.")
+    else:
+        notice = "Fulfillment still failing. Check logs."
+        await callback.answer("Fulfillment failed again.", show_alert=True)
+    await _render_fulfillment_tasks_overview(callback.message, session, notice=notice)
+
+
+@router.callback_query(F.data.startswith(ADMIN_FULFILLMENT_DISMISS_PREFIX))
+async def handle_admin_fulfillment_dismiss(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    raw = callback.data.removeprefix(ADMIN_FULFILLMENT_DISMISS_PREFIX)
+    try:
+        task_id = int(raw)
+    except ValueError:
+        await callback.answer("Invalid task.", show_alert=True)
+        return
+    service = FulfillmentTaskService(session)
+    task = await service.get_task(task_id)
+    if task is None:
+        await callback.answer("Task not found.", show_alert=True)
+        return
+    await service.dismiss(task)
+    await _render_fulfillment_tasks_overview(callback.message, session, notice="Task dismissed.")
+    await callback.answer("Task dismissed.")
+
+
+@router.message(AdminOrderSearchState.waiting_query)
+async def handle_admin_order_search_input(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text or text.lower() in TEXT_CANCEL_TOKENS:
+        await state.set_state(None)
+        await message.answer("Search cancelled.")
+        return
+    repo = OrderRepository(session)
+    results = await repo.search_orders(text, limit=10)
+    await state.set_state(None)
+    markup = order_search_results_keyboard(results, query=text)
+    await message.answer(_format_search_results_text(results, text), reply_markup=markup)
+
+
 @router.callback_query(F.data.startswith(ADMIN_RECENT_ORDERS_PAGE_PREFIX))
 async def handle_orders_view_recent_page(callback: CallbackQuery, session: AsyncSession) -> None:
     raw = callback.data.removeprefix(ADMIN_RECENT_ORDERS_PAGE_PREFIX)
@@ -670,6 +779,7 @@ async def handle_admin_order_timeline_status(
             answer_text = "Order cancelled."
             if status_def and status_def.notify_user:
                 await notify_user_status(callback.bot, order, status_key)
+            await _log_admin_action(session, callback.from_user.id, action="timeline_cancelled", order=order)
         else:
             notice_text = "Order already cancelled."
             answer_text = "Order already cancelled."
@@ -683,6 +793,12 @@ async def handle_admin_order_timeline_status(
         if order.status in {OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
             order.status = OrderStatus.PAID
             await session.flush()
+        await _log_admin_action(
+            session,
+            callback.from_user.id,
+            action=f"timeline_{status_key}",
+            order=order,
+        )
 
     if callback.message:
         await state.update_data(
@@ -791,6 +907,7 @@ async def handle_admin_order_timeline_note_input(
         note=text,
         actor=actor,
     )
+    await _log_admin_action(session, message.from_user.id, action="timeline_note", order=order)
 
     await _render_admin_order_detail(
         None,
@@ -883,6 +1000,7 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         reply_markup_override=_timeline_keyboard if using_timeline else None,
     )
     await callback.answer("Order marked as paid.")
+    await _log_admin_action(session, callback.from_user.id, action="mark_paid", order=order)
 
 
 @router.callback_query(F.data.startswith(ADMIN_ORDER_MARK_FULFILLED_PREFIX))
@@ -903,6 +1021,7 @@ async def handle_admin_order_mark_fulfilled(callback: CallbackQuery, session: As
     if delivered:
         notice = "Fulfillment executed successfully."
         await _render_admin_order_detail(callback.message, session, public_id, notice=notice)
+        await _log_admin_action(session, callback.from_user.id, action="mark_fulfilled", order=order)
         await callback.answer("Fulfillment executed.")
     else:
         notice = "Order already fulfilled."
@@ -1013,6 +1132,7 @@ async def handle_admin_order_notify_delivered(
         notice=notice,
         reply_markup_override=_timeline_keyboard if using_timeline else None,
     )
+    await _log_admin_action(session, callback.from_user.id, action="notify_delivered", order=order)
     await callback.answer("Customer notified.")
 
 
@@ -1663,6 +1783,23 @@ async def _render_timeline_filtered_orders_message(
         await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
+async def _render_fulfillment_tasks_overview(
+    message: Message,
+    session: AsyncSession,
+    *,
+    notice: str | None = None,
+) -> None:
+    tasks = await FulfillmentTaskService(session).list_open(limit=10)
+    text = _format_fulfillment_tasks_text(tasks)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    markup = fulfillment_tasks_keyboard(tasks)
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await message.answer(text, reply_markup=markup)
+
+
 async def _remember_status_message_context(state: FSMContext, message: Message | None) -> None:
     if message is None:
         return
@@ -2230,6 +2367,75 @@ def _format_timeline_entry(entry: OrderTimeline) -> list[str]:
         lines.append(f"  {note}")
 
     return lines
+
+
+def _format_fulfillment_tasks_text(tasks: Sequence["OrderFulfillmentTask"]) -> str:
+    lines = ["<b>Fulfillment queue</b>"]
+    if not tasks:
+        lines.append("No pending fulfillment retries.")
+        return "\n".join(lines)
+    for task in tasks:
+        order = task.order
+        label = getattr(order, "public_id", "?")
+        product = getattr(getattr(order, "product", None), "name", "")
+        lines.append(
+            f"• {label} - {product or 'Order'}\n  Status: {task.status} (attempts: {task.attempts})"
+        )
+        if task.last_error:
+            lines.append(f"  Last error: {task.last_error}")
+        if task.last_attempted_at:
+            lines.append(f"  Last attempt: {task.last_attempted_at:%Y-%m-%d %H:%M UTC}")
+    lines.append("")
+    lines.append("Select a task below to retry or dismiss.")
+    return "\n".join(lines)
+
+
+def _format_admin_action_logs_text(logs) -> str:
+    lines = ["<b>Admin activity</b>"]
+    if not logs:
+        lines.append("No actions recorded yet.")
+        return "\n".join(lines)
+    for log_entry in logs:
+        timestamp = log_entry.created_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        label = f"{timestamp} - admin {log_entry.admin_id} - {log_entry.action}"
+        if log_entry.order:
+            label += f" ({log_entry.order.public_id})"
+        lines.append(label)
+        meta = log_entry.meta or {}
+        if meta:
+            lines.append(f"  Meta: {meta}")
+    return "\n".join(lines)
+
+
+def _format_search_results_text(orders: Sequence[Order], query: str) -> str:
+    lines = [f"<b>Search results</b> for <code>{query}</code>"]
+    if not orders:
+        lines.append("No orders matched your query.")
+        return "\n".join(lines)
+    for order in orders:
+        product = getattr(order.product, "name", "") or "Order"
+        status = order.status.value.replace("_", " ").title()
+        lines.append(f"• {product} - {order.public_id} ({status})")
+    lines.append("")
+    lines.append("Select an order below or run a new search.")
+    return "\n".join(lines)
+
+
+async def _log_admin_action(
+    session: AsyncSession,
+    admin_id: int,
+    *,
+    action: str,
+    order: Order | None = None,
+    meta: dict | None = None,
+) -> None:
+    service = AdminActionLogService(session)
+    await service.record(
+        admin_id=admin_id,
+        action=action,
+        order_id=(order.id if order else None),
+        meta=meta or {},
+    )
 
 
 def _format_delivery_notice(order: Order, *, meta: dict[str, Any]) -> str:

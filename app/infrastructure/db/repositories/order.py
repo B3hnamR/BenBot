@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.enums import OrderStatus
@@ -273,6 +273,32 @@ class OrderRepository(BaseRepository):
     async def list_pending_payments(self, limit: int = 10) -> list[Order]:
         orders, _ = await self.paginate_pending_payments(limit=limit, offset=0)
         return orders
+
+    async def search_orders(self, query: str, *, limit: int = 20) -> list[Order]:
+        if not query:
+            return []
+        like = f"%{query.lower()}%"
+        predicates = [
+            func.lower(Order.public_id).like(like),
+            func.lower(func.coalesce(Order.invoice_payload, "")).like(like),
+            func.lower(func.coalesce(Product.name, "")).like(like),
+        ]
+        if query.isdigit():
+            predicates.append(Order.user_id == int(query))
+            predicates.append(Order.id == int(query))
+        stmt = (
+            select(Order)
+            .join(Product, Product.id == Order.product_id)
+            .options(
+                joinedload(Order.user),
+                joinedload(Order.product),
+            )
+            .where(or_(*predicates))
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().unique().all())
 
     async def top_paid_products(self, limit: int = 5) -> list[tuple[str, str, int, Decimal]]:
         result = await self.session.execute(
