@@ -50,6 +50,19 @@ class OrderTimelineService:
         order_id = order.id if isinstance(order, Order) else int(order)
         return await self._repo.list_for_order(order_id)
 
+    async def list_orders_with_status(
+        self,
+        status: str,
+        *,
+        limit: int,
+        offset: int = 0,
+    ) -> list[Order]:
+        return await self._repo.list_orders_with_latest_status(
+            status,
+            limit=limit,
+            offset=offset,
+        )
+
     @classmethod
     def label_for_status(cls, status: str | None) -> str:
         if not status:

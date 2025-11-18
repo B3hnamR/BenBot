@@ -64,6 +64,13 @@ async def ensure_fulfillment(
     if user is None or user.telegram_id is None:
         return False
 
+    inventory_update = await _apply_inventory_adjustment(order)
+
+    fulfillment_service = FulfillmentService(session)
+    action_result = await fulfillment_service.execute(order, bot)
+
+    shipping_note = _build_shipping_note(order, inventory_update, action_result)
+
     timeline_service = OrderTimelineService(session)
     existing_events = await timeline_service.list_events(order)
     has_shipping_event = any(
@@ -82,17 +89,8 @@ async def ensure_fulfillment(
             bot,
             order,
             "shipping",
+            note=shipping_note,
         )
-
-    inventory_update = await _apply_inventory_adjustment(order)
-
-    fulfillment_service = FulfillmentService(session)
-    action_result = await fulfillment_service.execute(order, bot)
-
-    await bot.send_message(
-        user.telegram_id,
-        _build_user_message(order, inventory_update, action_result),
-    )
 
     notification_extra = _inventory_admin_lines(inventory_update, action_result)
     notifications = OrderNotificationService(session)
@@ -146,24 +144,15 @@ def _get_payment_meta(order: Order) -> dict[str, Any]:
     return dict(meta) if isinstance(meta, dict) else {}
 
 
-def _build_user_message(
+def _build_shipping_note(
     order: Order,
     inventory_update: InventoryUpdate | None,
     action_result: dict[str, Any] | None,
-) -> str:
+) -> str | None:
     summary = build_order_summary(order)
-    if summary.has_cart_items:
-        headline = f"Order <code>{order.public_id}</code> is confirmed."
-    else:
-        headline = f"Order <code>{order.public_id}</code> for {summary.label} is confirmed."
+    lines: list[str] = []
 
-    lines = [
-        "<b>Payment received!</b>",
-        headline,
-        "We'll process fulfillment shortly and keep you posted.",
-    ]
     if summary.has_cart_items and summary.item_lines:
-        lines.append("")
         lines.append("<b>Items</b>")
         lines.extend(summary.item_lines)
     if summary.has_cart_items and summary.totals_lines:
@@ -190,7 +179,7 @@ def _build_user_message(
         lines.append("")
         lines.append(f"<b>Your license</b>: <code>{license_code}</code>")
 
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else None
 
 
 def _inventory_admin_lines(
@@ -337,4 +326,5 @@ def _decrement_inventory(
     )
 
     return True, before, int(product.inventory), product_deactivated
+
 

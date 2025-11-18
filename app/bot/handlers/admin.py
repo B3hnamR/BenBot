@@ -24,12 +24,15 @@ from app.bot.keyboards.admin import (
     ADMIN_ORDER_TIMELINE_MENU_PREFIX,
     ADMIN_ORDER_TIMELINE_STATUS_PREFIX,
     ADMIN_ORDER_TIMELINE_NOTE_PREFIX,
+    ADMIN_ORDER_TIMELINE_FILTER_PREFIX,
     admin_menu_keyboard,
     crypto_settings_keyboard,
     order_manage_keyboard,
     order_settings_keyboard,
     recent_orders_keyboard,
     order_timeline_menu_keyboard,
+    order_timeline_filters_keyboard,
+    order_timeline_filtered_orders_keyboard,
     loyalty_settings_keyboard,
 )
 from app.bot.keyboards.main_menu import MainMenuCallback, main_menu_keyboard
@@ -55,6 +58,7 @@ from app.services.order_status_notifier import notify_user_status
 router = Router(name="admin")
 
 RECENT_ORDERS_PAGE_SIZE = 10
+TIMELINE_FILTER_LIMIT = 10
 
 LEGACY_ADMIN_ORDER_TIMELINE_MENU_PREFIX = "admin:orders:timeline_menu:"
 LEGACY_ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "admin:orders:timeline_status:"
@@ -199,6 +203,36 @@ async def handle_orders_view_recent(callback: CallbackQuery, session: AsyncSessi
     rendered = await _render_recent_orders_message(callback.message, session, page=0)
     if not rendered:
         await callback.answer("No recent orders found.", show_alert=True)
+    else:
+        await callback.answer()
+
+
+@router.callback_query(F.data == AdminOrderCallback.TIMELINE_FILTERS.value)
+async def handle_admin_order_timeline_filters(callback: CallbackQuery, session: AsyncSession) -> None:
+    await _render_timeline_filters_message(callback.message, session)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ADMIN_ORDER_TIMELINE_FILTER_PREFIX))
+async def handle_admin_order_timeline_filter_select(callback: CallbackQuery, session: AsyncSession) -> None:
+    status_key = callback.data.removeprefix(ADMIN_ORDER_TIMELINE_FILTER_PREFIX)
+    if not status_key:
+        await callback.answer("Invalid filter.", show_alert=True)
+        return
+
+    timeline_service = OrderTimelineService(session)
+    orders = await timeline_service.list_orders_with_status(status_key, limit=TIMELINE_FILTER_LIMIT)
+    status_label = OrderTimelineService.label_for_status(status_key)
+
+    await _render_timeline_filtered_orders_message(
+        callback.message,
+        session,
+        status=status_key,
+        status_label=status_label,
+        orders=orders,
+    )
+    if not orders:
+        await callback.answer("No orders in this status.")
     else:
         await callback.answer()
 
@@ -1219,6 +1253,45 @@ async def _render_recent_orders_message(
     return True
 
 
+async def _render_timeline_filters_message(
+    message: Message,
+    session: AsyncSession,
+    *,
+    notice: str | None = None,
+) -> None:
+    base_text = "<b>Timeline filters</b>\nPick a status below to review matching orders."
+    text = f"{notice}\n\n{base_text}" if notice else base_text
+    markup = order_timeline_filters_keyboard()
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await message.answer(text, reply_markup=markup)
+
+
+async def _render_timeline_filtered_orders_message(
+    message: Message,
+    session: AsyncSession,
+    *,
+    status: str,
+    status_label: str,
+    orders: Sequence[Order],
+) -> None:
+    text = _format_timeline_filtered_orders_text(
+        status_label,
+        orders,
+        limit=TIMELINE_FILTER_LIMIT,
+    )
+    markup = order_timeline_filtered_orders_keyboard(
+        orders,
+        status_key=status,
+        status_label=status_label,
+    )
+    try:
+        await message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+
+
 async def _render_admin_order_detail(
     message: Message | None,
     session: AsyncSession,
@@ -1462,6 +1535,34 @@ def _format_recent_orders_text(
         lines.append(f"User: {order.user_id} - Public ID: <code>{order.public_id}</code> - Created: {created}")
     lines.append("")
     lines.append("Select an order below to view details.")
+    return "\n".join(lines)
+
+
+def _format_timeline_filtered_orders_text(
+    status_label: str,
+    orders: Sequence[Order],
+    *,
+    limit: int,
+) -> str:
+    lines = [
+        f"<b>Orders with timeline status {status_label}</b>",
+        f"Showing {len(orders)} of up to {limit} results.",
+    ]
+    if not orders:
+        lines.append("No orders currently match this status.")
+        lines.append("Use the buttons below to choose another status or return to orders.")
+        return "\n".join(lines)
+
+    for idx, order in enumerate(orders, start=1):
+        product_name = getattr(order.product, "name", "-")
+        created = _format_datetime(getattr(order, "created_at", None))
+        amount = f"{order.total_amount} {order.currency}"
+        lines.append(f"{idx}. {product_name} · {amount}")
+        lines.append(
+            f"   Order: <code>{order.public_id}</code> · User: {order.user_id} · Created: {created}"
+        )
+    lines.append("")
+    lines.append("Select an order below to view details or go back to filters.")
     return "\n".join(lines)
 
 

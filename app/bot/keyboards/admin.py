@@ -52,6 +52,7 @@ class AdminOrderCallback(StrEnum):
     TOGGLE_CANCEL_ALERT = "admin:orders:toggle_cancel"
     TOGGLE_EXPIRE_ALERT = "admin:orders:toggle_expire"
     VIEW_RECENT = "admin:orders:view_recent"
+    TIMELINE_FILTERS = "admin:orders:timeline_filters"
     BACK = "admin:orders:back"
 
 
@@ -82,6 +83,7 @@ ADMIN_COUPON_TOGGLE_PREFIX = "admin:coupon:toggle:"
 ADMIN_ORDER_TIMELINE_MENU_PREFIX = "ao:tlm:"
 ADMIN_ORDER_TIMELINE_STATUS_PREFIX = "ao:tls:"
 ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "ao:tln:"
+ADMIN_ORDER_TIMELINE_FILTER_PREFIX = "ao:tlf:"
 ADMIN_COUPON_EDIT_MENU_PREFIX = "admin:coupon:editmenu:"
 ADMIN_COUPON_EDIT_FIELD_PREFIX = "admin:coupon:edit:"
 ADMIN_COUPON_USAGE_PREFIX = "admin:coupon:usage:"
@@ -201,6 +203,10 @@ def order_settings_keyboard(config: "ConfigService.AlertSettings") -> InlineKeyb
     builder.button(
         text="Review recent orders",
         callback_data=AdminOrderCallback.VIEW_RECENT.value,
+    )
+    builder.button(
+        text="Timeline filters",
+        callback_data=AdminOrderCallback.TIMELINE_FILTERS.value,
     )
     builder.button(text="Back", callback_data=AdminOrderCallback.BACK.value)
     builder.adjust(1)
@@ -485,6 +491,58 @@ def order_timeline_menu_keyboard(
     builder.button(
         text="Back",
         callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{public_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_timeline_filters_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    options = [
+        ("Processing", "processing"),
+        ("Shipping", "shipping"),
+        ("Delivered", "delivered"),
+        ("Cancelled", "cancelled"),
+    ]
+    for label, key in options:
+        builder.button(
+            text=label,
+            callback_data=f"{ADMIN_ORDER_TIMELINE_FILTER_PREFIX}{key}",
+        )
+    builder.button(
+        text="Back to orders",
+        callback_data=AdminMenuCallback.MANAGE_ORDERS.value,
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_timeline_filtered_orders_keyboard(
+    orders: Sequence["Order"],
+    *,
+    status_key: str,
+    status_label: str,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        product_name = getattr(order.product, "name", "") or "Order"
+        trimmed = product_name[:32]
+        amount = f"{order.total_amount} {order.currency}"
+        builder.button(
+            text=f"{trimmed} · {amount}",
+            callback_data=f"{ADMIN_ORDER_VIEW_PREFIX}{order.public_id}",
+        )
+    builder.button(
+        text=f"Refresh {status_label}",
+        callback_data=f"{ADMIN_ORDER_TIMELINE_FILTER_PREFIX}{status_key}",
+    )
+    builder.button(
+        text="Back to filters",
+        callback_data=AdminOrderCallback.TIMELINE_FILTERS.value,
+    )
+    builder.button(
+        text="Back to orders",
+        callback_data=AdminMenuCallback.MANAGE_ORDERS.value,
     )
     builder.adjust(1)
     return builder.as_markup()

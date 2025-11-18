@@ -6,19 +6,20 @@ from aiogram import Bot
 
 from app.core.logging import get_logger
 from app.infrastructure.db.models import Order
+
 log = get_logger(__name__)
 
 STATUS_MESSAGES: Mapping[str, str] = {
     "processing": (
-        "✅ Your order <code>{order_id}</code> is now being processed.\n"
+        "Order <code>{order_id}</code> is now being processed.\n"
         "We'll let you know as soon as it ships."
     ),
     "shipping": (
-        "📦 Great news! Order <code>{order_id}</code> is on its way.\n"
+        "Great news! Order <code>{order_id}</code> is on its way.\n"
         "We'll notify you once it has been delivered."
     ),
     "delivered": (
-        "🎉 Order <code>{order_id}</code> has been delivered.\n"
+        "Order <code>{order_id}</code> has been delivered.\n"
         "If you need anything else, just let us know."
     ),
 }
