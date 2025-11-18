@@ -775,6 +775,20 @@ def _format_order_details(
         for entry in status_entries:
             lines.extend(_format_user_timeline_entry(entry))
 
+    service_info = _order_service_lines(order)
+    if service_info:
+        lines.append("")
+        lines.extend(service_info)
+
+    status_entries = [
+        entry for entry in (timeline or []) if entry.event_type != "note"
+    ]
+    if status_entries:
+        lines.append("")
+        lines.append("<b>Timeline</b>")
+        for entry in status_entries:
+            lines.extend(_format_user_timeline_entry(entry))
+
     return "\n".join(lines)
 
 
@@ -857,6 +871,44 @@ def _get_oxapay_payment(order: Order) -> dict[str, Any]:
     if isinstance(data, dict):
         return data
     return {}
+
+
+def _order_service_lines(order: Order) -> list[str]:
+    duration = getattr(order, "service_duration_days", None)
+    if not duration or duration <= 0:
+        return []
+    started_at = getattr(order, "service_started_at", None)
+    if started_at is None:
+        return ["Service status: not started yet."]
+    paused_at = getattr(order, "service_paused_at", None)
+    paused_total = int(getattr(order, "service_paused_total_seconds", 0) or 0)
+    now = datetime.now(tz=timezone.utc)
+    elapsed = (now - _ensure_utc(started_at)).total_seconds()
+    if paused_at:
+        elapsed -= (now - _ensure_utc(paused_at)).total_seconds()
+    elapsed -= paused_total
+    total_seconds = duration * 86400
+    remaining = max(int(total_seconds - max(elapsed, 0)), 0)
+    status = "Paused" if paused_at else "Active"
+    lines = [f"Service status: {status}"]
+    lines.append(f"Time remaining: {_humanize_seconds(remaining)}")
+    lines.append(f"ETA expiry: {(now + timedelta(seconds=remaining)):%Y-%m-%d %H:%M UTC}")
+    return lines
+
+
+def _humanize_seconds(seconds: int) -> str:
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    if minutes or hours or days:
+        parts.append(f"{minutes}m")
+    parts.append(f"{sec}s")
+    return " ".join(parts)
 
 
 def _order_display_status(order: Order) -> str:
