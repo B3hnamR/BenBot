@@ -40,7 +40,6 @@ from app.services.cart_service import CartService
 from app.services.config_service import ConfigService
 from app.services.referral_service import ReferralService
 from app.services.order_service import OrderService
-from app.services.order_fulfillment import ensure_fulfillment
 from app.services.order_notification_service import OrderNotificationService
 from app.services.order_timeline_service import OrderTimelineService
 from app.services.crypto_payment_service import (
@@ -329,9 +328,6 @@ async def handle_order_view(callback: CallbackQuery, session: AsyncSession, stat
             page=current_page,
         ),
     )
-
-    if order.status == OrderStatus.PAID:
-        await ensure_fulfillment(session, callback.bot, order, source="user_view")
 
     await callback.answer()
 

@@ -89,7 +89,8 @@ LEGACY_ADMIN_ORDER_TIMELINE_NOTE_PREFIX = "admin:orders:timeline_note:"
 
 
 def _timeline_keyboard(order: Order, timeline: Sequence[OrderTimeline] | None) -> InlineKeyboardMarkup:
-    return order_timeline_menu_keyboard(order, timeline=timeline)
+    statuses = TimelineStatusRegistry.show_in_menu()
+    return order_timeline_menu_keyboard(order, timeline=timeline, statuses=statuses)
 
 
 @router.callback_query(F.data == MainMenuCallback.ADMIN.value)
@@ -642,6 +643,10 @@ async def handle_admin_order_timeline_status(
         if callback.message:
             await _render_recent_orders_message(callback.message, session, notice="Order removed.")
         return
+    try:
+        await session.refresh(order, attribute_names=["user"])
+    except Exception:
+        pass
 
     actor = f"admin:{callback.from_user.id}"
     timeline_service = OrderTimelineService(session)
@@ -675,6 +680,9 @@ async def handle_admin_order_timeline_status(
         answer_text = f"{label} logged."
         if status_def and status_def.notify_user:
             await notify_user_status(callback.bot, order, status_key)
+        if order.status in {OrderStatus.CANCELLED, OrderStatus.EXPIRED}:
+            order.status = OrderStatus.PAID
+            await session.flush()
 
     if callback.message:
         await state.update_data(
@@ -821,16 +829,30 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         await callback.answer("Order cannot be marked as paid in its current state.", show_alert=True)
         await _render_admin_order_detail(callback.message, session, public_id)
         return
-    await session.refresh(order, attribute_names=["product"])
+    await session.refresh(order, attribute_names=["product", "user"])
     product = order.product
     if product is None or not product.is_active:
         await callback.answer("Product is not active.", show_alert=True)
         await _render_admin_order_detail(callback.message, session, public_id)
         return
     charge_id = f"manual:{datetime.now(tz=timezone.utc).isoformat()}"
-    await order_service.mark_paid(order, charge_id=charge_id, actor=f"admin:{callback.from_user.id}")
+    actor = f"admin:{callback.from_user.id}"
+    await order_service.mark_paid(order, charge_id=charge_id, actor=actor)
     order.invoice_payload = None
     order.payment_provider = "manual"
+    timeline_service = OrderTimelineService(session)
+    notifications = OrderNotificationService(session)
+    await notifications.notify_payment(callback.bot, order, source="admin_manual_paid")
+
+    await timeline_service.add_event(
+        order,
+        status="processing",
+        actor=actor,
+        note="Processing started after manual payment confirmation.",
+    )
+    processing_def = TimelineStatusRegistry.get("processing")
+    if processing_def and processing_def.notify_user:
+        await notify_user_status(callback.bot, order, "processing")
 
     state_data = await state.get_data()
     using_timeline = state_data.get("timeline_public_id") == public_id

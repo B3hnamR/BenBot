@@ -84,8 +84,11 @@ def _default_statuses() -> list[TimelineStatusDefinition]:
         TimelineStatusDefinition(
             key="cancelled",
             label="Cancelled",
-            notify_user=False,
-            user_message=None,
+            notify_user=True,
+            user_message=(
+                "Order <code>{order_id}</code> has been cancelled.\n"
+                "Contact support if this is unexpected."
+            ),
             show_in_menu=True,
             show_in_filters=True,
             locked=True,
@@ -152,14 +155,20 @@ class TimelineStatusService:
             statuses = _default_statuses()
             await self._persist(statuses)
         else:
-            TimelineStatusRegistry.set_statuses(statuses)
+            if self._apply_locked_defaults(statuses):
+                await self._persist(statuses)
+            else:
+                TimelineStatusRegistry.set_statuses(statuses)
         return statuses
 
     async def list_statuses(self) -> list[TimelineStatusDefinition]:
         statuses = await self._load_from_store()
         if not statuses:
             return await self.ensure_defaults()
-        TimelineStatusRegistry.set_statuses(statuses)
+        if self._apply_locked_defaults(statuses):
+            await self._persist(statuses)
+        else:
+            TimelineStatusRegistry.set_statuses(statuses)
         return statuses
 
     async def add_status(
@@ -239,6 +248,42 @@ class TimelineStatusService:
         payload = [status.to_mapping() for status in statuses]
         await self._settings.upsert(SettingKey.ORDER_TIMELINE_STATUSES, payload)
         TimelineStatusRegistry.set_statuses(statuses)
+
+    @staticmethod
+    def _apply_locked_defaults(statuses: list[TimelineStatusDefinition]) -> bool:
+        defaults = {entry.key: entry for entry in _default_statuses()}
+        updated = False
+        existing_keys = {status.key for status in statuses}
+        for key, default in defaults.items():
+            if key not in existing_keys:
+                statuses.append(default)
+                updated = True
+                continue
+            for idx, status in enumerate(statuses):
+                if status.key != key or not status.locked:
+                    continue
+                notify_user = status.notify_user
+                user_message = status.user_message
+                changed = False
+                if not notify_user and default.notify_user:
+                    notify_user = True
+                    changed = True
+                if not user_message and default.user_message:
+                    user_message = default.user_message
+                    changed = True
+                if changed:
+                    statuses[idx] = TimelineStatusDefinition(
+                        key=status.key,
+                        label=status.label or default.label,
+                        notify_user=notify_user,
+                        user_message=user_message,
+                        show_in_menu=status.show_in_menu,
+                        show_in_filters=status.show_in_filters,
+                        locked=True,
+                    )
+                    updated = True
+                break
+        return updated
 
     @staticmethod
     def _parse_payload(raw: Any) -> list[TimelineStatusDefinition]:

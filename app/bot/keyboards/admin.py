@@ -467,17 +467,9 @@ def order_timeline_menu_keyboard(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     public_id = order.public_id
-    events = list(timeline or getattr(order, "timelines", []) or [])
     options = list(statuses or TimelineStatusRegistry.show_in_menu())
-    delivered_recorded = any(
-        getattr(entry, "event_type", None) == "status"
-        and getattr(entry, "status", None) == "delivered"
-        for entry in events
-    )
     if options:
         for status in options:
-            if status.key == "delivered" and delivered_recorded:
-                continue
             builder.button(
                 text=status.label,
                 callback_data=f"{ADMIN_ORDER_TIMELINE_STATUS_PREFIX}{status.key}:{public_id}",
