@@ -699,6 +699,14 @@ def _format_order_details(
         f"Status: {_order_display_status(order)}",
         f"Total: {order.total_amount} {order.currency}",
     ]
+    extras = order.extra_attrs or {}
+    parent = extras.get("replacement_parent")
+    if parent:
+        lines.append(f"Replacement for order {parent}.")
+    children = extras.get("replacement_children")
+    if children:
+        child_list = ", ".join(children)
+        lines.append(f"Replacement orders issued: {child_list}")
     if order.invoice_payload:
         lines.append(f"Payment reference: <code>{order.invoice_payload}</code>")
     if order.payment_expires_at:

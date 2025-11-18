@@ -23,11 +23,11 @@ class OrderDurationService:
         order.service_paused_total_seconds = 0
         order.service_paused_at = None
 
-    async def pause(self, order: Order, *, reason: str | None = None) -> None:
+    async def pause(self, order: Order, *, reason: str | None = None) -> bool:
         if order.service_paused_at is not None:
-            return
+            return False
         if not self._has_duration(order):
-            return
+            return False
         now = datetime.now(tz=timezone.utc)
         order.service_paused_at = now
         period = OrderPausePeriod(
@@ -37,10 +37,11 @@ class OrderDurationService:
         )
         self._session.add(period)
         await self._session.flush()
+        return True
 
-    async def resume(self, order: Order) -> None:
+    async def resume(self, order: Order) -> bool:
         if order.service_paused_at is None:
-            return
+            return False
         now = datetime.now(tz=timezone.utc)
         paused_seconds = int((now - order.service_paused_at).total_seconds())
         order.service_paused_total_seconds = int(order.service_paused_total_seconds or 0) + max(paused_seconds, 0)
@@ -49,6 +50,7 @@ class OrderDurationService:
         period = next((p for p in order.pause_periods if getattr(p, "ended_at", None) is None), None)
         if period is not None:
             period.ended_at = now
+        return True
 
     def remaining_seconds(self, order: Order) -> int | None:
         if not self._has_duration(order):

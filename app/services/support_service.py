@@ -11,9 +11,10 @@ from sqlalchemy.orm.attributes import set_committed_value
 from typing import TYPE_CHECKING
 
 from app.core.enums import SupportAuthorRole, SupportTicketPriority, SupportTicketStatus
-from app.infrastructure.db.models import SupportTicket
+from app.infrastructure.db.models import Order, SupportTicket
 from app.infrastructure.db.repositories import OrderRepository, SupportRepository, UserRepository
 from app.services.order_duration_service import OrderDurationService
+from app.services.order_service import OrderService
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
@@ -35,6 +36,7 @@ class SupportService:
         self._tickets = SupportRepository(session)
         self._orders = OrderRepository(session)
         self._users = UserRepository(session)
+        self._order_service = OrderService(session)
         self._duration = OrderDurationService(session)
 
     async def create_ticket(
@@ -178,7 +180,9 @@ class SupportService:
         order = ticket.order
         if order is None or not self._duration.has_duration(order):
             return False
-        await self._duration.pause(order, reason=reason)
+        changed = await self._duration.pause(order, reason=reason)
+        if not changed:
+            return False
         await self._tickets.session.flush()
         return True
 
@@ -187,11 +191,26 @@ class SupportService:
         order = ticket.order
         if order is None or not self._duration.has_duration(order):
             return False
-        if not self._duration.is_paused(order):
+        changed = await self._duration.resume(order)
+        if not changed:
             return False
-        await self._duration.resume(order)
         await self._tickets.session.flush()
         return True
+
+    async def create_replacement_order(
+        self,
+        ticket: SupportTicket,
+        *,
+        actor: str | None = None,
+    ) -> Order | None:
+        await self.ensure_order_loaded(ticket)
+        if ticket.order is None:
+            return None
+        replacement = await self._order_service.create_replacement_order(
+            ticket.order,
+            actor=actor,
+        )
+        return replacement
 
     async def add_system_message(
         self,

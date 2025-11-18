@@ -157,6 +157,10 @@ def admin_support_ticket_keyboard(
                 text="Pause service timer",
                 callback_data=f"{ADMIN_SUPPORT_ORDER_ACTION_PREFIX}pause:{ticket.public_id}",
             )
+        builder.button(
+            text="Create replacement",
+            callback_data=f"{ADMIN_SUPPORT_ORDER_ACTION_PREFIX}replace:{ticket.public_id}",
+        )
 
     builder.button(
         text="Back",

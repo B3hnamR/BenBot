@@ -170,6 +170,83 @@ class OrderService:
         )
         return order
 
+    async def create_replacement_order(
+        self,
+        original_order: Order,
+        *,
+        actor: str | None = None,
+        product: Product | None = None,
+    ) -> Order:
+        if original_order.product is None:
+            await self._session.refresh(original_order, attribute_names=["product"])
+        source_product = product or original_order.product
+        if source_product is None:
+            raise OrderCreationError("Original order product is unavailable.")
+
+        if not hasattr(original_order, "answers"):
+            await self._session.refresh(original_order, attribute_names=["answers"])
+
+        await self._duration.pause(original_order, reason="replacement")
+        remaining_seconds = self._duration.remaining_seconds(original_order)
+
+        replacement = await self._orders.create_order(
+            user_id=original_order.user_id,
+            product_id=source_product.id,
+            amount=Decimal(0),
+            currency=original_order.currency,
+            expires_at=None,
+            extra_attrs={},
+        )
+        replacement.status = OrderStatus.PAID
+        replacement.replacement_of_id = original_order.id
+
+        for answer in getattr(original_order, "answers", []) or []:
+            await self._orders.add_answer(
+                replacement,
+                question_key=answer.question_key,
+                answer_text=answer.answer_text,
+            )
+
+        await self._session.flush()
+
+        if remaining_seconds is not None:
+            duration_days = max(1, math.ceil(remaining_seconds / 86400))
+        else:
+            duration_days = source_product.service_duration_days or original_order.service_duration_days or 1
+
+        await self._duration.start(replacement, duration_days=duration_days)
+        await self._timeline.add_event(
+            replacement,
+            status="created",
+            note="Replacement order issued.",
+            actor=actor or "system",
+        )
+        await self._timeline.add_event(
+            replacement,
+            status="paid",
+            note="Replacement order created.",
+            actor=actor or "system",
+        )
+        await self._timeline.add_event(
+            original_order,
+            event_type="note",
+            note=f"Replacement order {replacement.public_id} issued.",
+            actor=actor or "system",
+        )
+
+        extra = dict(original_order.extra_attrs or {})
+        children = extra.get("replacement_children") or []
+        if replacement.public_id not in children:
+            children.append(replacement.public_id)
+        extra["replacement_children"] = children
+        rep_extra = {"replacement_parent": original_order.public_id}
+        await self._orders.merge_extra_attrs(original_order, extra)
+        original_order.extra_attrs = extra
+        await self._orders.merge_extra_attrs(replacement, rep_extra)
+        replacement.extra_attrs = rep_extra
+
+        return replacement
+
 
     @staticmethod
     def _ensure_utc(value: datetime) -> datetime:

@@ -369,6 +369,9 @@ async def handle_admin_support_order_action(callback: CallbackQuery, session: As
                 body="Service timer paused by admin.",
                 payload={"admin_id": callback.from_user.id},
             )
+            user_body = _format_service_timer_body(ticket.order, "paused")
+            if user_body:
+                await _notify_ticket_user(ticket, callback.message.bot, user_body)
             message_text = "Service timer paused."
         else:
             message_text = "Unable to pause (already paused or no active duration)."
@@ -380,9 +383,35 @@ async def handle_admin_support_order_action(callback: CallbackQuery, session: As
                 body="Service timer resumed by admin.",
                 payload={"admin_id": callback.from_user.id},
             )
+            user_body = _format_service_timer_body(ticket.order, "resumed")
+            if user_body:
+                await _notify_ticket_user(ticket, callback.message.bot, user_body)
             message_text = "Service timer resumed."
         else:
             message_text = "Unable to resume (timer not paused or no active duration)."
+    elif action == "replace":
+        new_order = await service.create_replacement_order(
+            ticket,
+            actor=f"admin:{callback.from_user.id}",
+        )
+        if new_order is not None:
+            meta = dict(ticket.meta or {})
+            replacements = meta.get("replacement_orders") or []
+            replacements.append(new_order.public_id)
+            meta["replacement_orders"] = replacements
+            ticket.meta = meta
+            await service.add_system_message(
+                ticket,
+                body=f"Replacement order {new_order.public_id} created.",
+                payload={"admin_id": callback.from_user.id},
+            )
+            replace_body = _format_replacement_body(ticket.order, new_order)
+            if replace_body:
+                await _notify_ticket_user(ticket, callback.message.bot, replace_body)
+            await session.flush()
+            message_text = f"Replacement order {new_order.public_id} created."
+        else:
+            message_text = "Unable to create replacement (no linked order)."
     else:
         await callback.answer("Unknown action.", show_alert=True)
         return
@@ -556,10 +585,14 @@ def _format_admin_ticket_detail(ticket: SupportTicket) -> str:
         service_lines = _format_order_service_lines(ticket.order)
         if service_lines:
             lines.extend(service_lines)
-    if ticket.meta:
-        tags = ticket.meta.get("tags") if isinstance(ticket.meta, dict) else None
+    meta = ticket.meta if isinstance(ticket.meta, dict) else {}
+    if meta:
+        tags = meta.get("tags")
         if tags:
             lines.append(f"Tags: {', '.join(tags)}")
+        replacement_orders = meta.get("replacement_orders")
+        if replacement_orders:
+            lines.append(f"Replacement orders: {', '.join(replacement_orders)}")
     if ticket.last_activity_at:
         lines.append(f"Last activity: {ticket.last_activity_at:%Y-%m-%d %H:%M UTC}")
     lines.append("")
@@ -596,6 +629,61 @@ def _format_ticket_resolved_notification(ticket: SupportTicket) -> str:
         "Your ticket has been marked as resolved. Reply in this conversation if you still need help.",
     ]
     return "\n".join(lines)
+
+
+async def _notify_ticket_user(ticket: SupportTicket, bot, body: str | None) -> None:
+    if not body:
+        return
+    user_chat_id = getattr(getattr(ticket, "user", None), "telegram_id", None)
+    if not user_chat_id:
+        return
+    note = _format_user_notification(ticket, body)
+    try:
+        await bot.send_message(
+            user_chat_id,
+            note,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        pass
+
+
+def _order_reference_text(order) -> str | None:
+    if order is None:
+        return None
+    code = getattr(order, "public_id", None)
+    if code:
+        return f"order <code>{code}</code>"
+    return "your order"
+
+
+def _format_service_timer_body(order, action: Literal["paused", "resumed"]) -> str | None:
+    reference = _order_reference_text(order)
+    if reference is None:
+        return None
+    if action == "paused":
+        return (
+            f"The service timer for {reference} was paused by support.\n"
+            "Downtime won't reduce your remaining service days."
+        )
+    return (
+        f"The service timer for {reference} is active again.\n"
+        "Your service duration now continues normally."
+    )
+
+
+def _format_replacement_body(order, new_order) -> str | None:
+    new_code = getattr(new_order, "public_id", None)
+    if not new_code:
+        return None
+    reference = _order_reference_text(order)
+    prefix = "A replacement order has been created"
+    if reference:
+        prefix += f" for {reference}"
+    return (
+        f"{prefix}: <code>{new_code}</code>.\n"
+        "You can find it in My Orders and the remaining service time continues automatically."
+    )
 
 
 def _format_order_service_lines(order) -> list[str]:
