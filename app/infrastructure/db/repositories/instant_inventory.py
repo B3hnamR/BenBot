@@ -14,13 +14,13 @@ class InstantInventoryRepository(BaseRepository):
         *,
         label: str,
         payload: str | None = None,
-        metadata: dict | None = None,
+        meta: dict | None = None,
     ) -> InstantInventoryItem:
         item = InstantInventoryItem(
             product_id=product_id,
             label=label,
             payload=payload,
-            metadata=metadata,
+            meta=meta,
         )
         await self.add(item)
         return item

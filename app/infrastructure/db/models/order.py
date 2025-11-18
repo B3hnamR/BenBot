@@ -186,7 +186,7 @@ class InstantInventoryItem(IntPKMixin, TimestampMixin, Base):
     is_consumed: Mapped[bool] = mapped_column(Boolean(), default=False, nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"))
-    metadata: Mapped[dict | None] = mapped_column(JSON())
+    meta: Mapped[dict | None] = mapped_column(JSON())
 
     order: Mapped[Order | None] = relationship("Order", back_populates="instant_items")
     product: Mapped["Product"] = relationship("Product")

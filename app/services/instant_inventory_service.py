@@ -19,13 +19,13 @@ class InstantInventoryService:
         *,
         label: str,
         payload: str | None = None,
-        metadata: dict | None = None,
+        meta: dict | None = None,
     ) -> InstantInventoryItem:
         return await self._repo.add_item(
             product_id=product.id,
             label=label,
             payload=payload,
-            metadata=metadata,
+            meta=meta,
         )
 
     async def list_available(self, product: Product, limit: int = 10) -> list[InstantInventoryItem]:

@@ -64,7 +64,7 @@ def upgrade() -> None:
         sa.Column("is_consumed", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("order_id", sa.Integer(), sa.ForeignKey("orders.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("metadata", sa.JSON(), nullable=True),
+        sa.Column("meta", sa.JSON(), nullable=True),
     )
 
 
