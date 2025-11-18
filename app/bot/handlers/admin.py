@@ -831,7 +831,6 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
     await order_service.mark_paid(order, charge_id=charge_id, actor=f"admin:{callback.from_user.id}")
     order.invoice_payload = None
     order.payment_provider = "manual"
-    await ensure_fulfillment(session, callback.bot, order, source="admin_manual_paid")
 
     state_data = await state.get_data()
     using_timeline = state_data.get("timeline_public_id") == public_id
@@ -858,7 +857,7 @@ async def handle_admin_order_mark_paid(callback: CallbackQuery, session: AsyncSe
         callback.message,
         session,
         public_id,
-        notice="Order marked as paid.",
+        notice="Order marked as paid. Run fulfillment when ready.",
         reply_markup_override=_timeline_keyboard if using_timeline else None,
     )
     await callback.answer("Order marked as paid.")
