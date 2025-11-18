@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from aiogram import F, Router
@@ -17,6 +18,7 @@ from app.bot.keyboards.admin_support import (
     ADMIN_SUPPORT_MENU_AWAITING_USER,
     ADMIN_SUPPORT_MENU_OPEN,
     ADMIN_SUPPORT_SETTINGS,
+    ADMIN_SUPPORT_ORDER_ACTION_PREFIX,
     ADMIN_SUPPORT_SPAM_PREFIX,
     ADMIN_SUPPORT_PRIORITY_PREFIX,
     ADMIN_SUPPORT_REPLY_PREFIX,
@@ -341,6 +343,61 @@ async def handle_admin_support_priority(callback: CallbackQuery, session: AsyncS
     await callback.answer("Priority updated.")
 
 
+@router.callback_query(F.data.startswith(ADMIN_SUPPORT_ORDER_ACTION_PREFIX))
+async def handle_admin_support_order_action(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    remainder = callback.data.removeprefix(ADMIN_SUPPORT_ORDER_ACTION_PREFIX)
+    try:
+        action, ticket_id = remainder.split(":", 1)
+    except ValueError:
+        await callback.answer("Invalid action.", show_alert=True)
+        return
+
+    service = SupportService(session)
+    ticket = await service.get_ticket_by_public_id(ticket_id)
+    if ticket is None:
+        await callback.answer("Ticket not found.", show_alert=True)
+        return
+    ticket = await service.ensure_order_loaded(ticket)
+    ticket = await service.ensure_user_loaded(ticket)
+
+    message_text = None
+    if action == "pause":
+        changed = await service.pause_ticket_order(ticket, reason=f"ticket:{ticket.public_id}")
+        if changed:
+            await service.add_system_message(
+                ticket,
+                body="Service timer paused by admin.",
+                payload={"admin_id": callback.from_user.id},
+            )
+            message_text = "Service timer paused."
+        else:
+            message_text = "Unable to pause (already paused or no active duration)."
+    elif action == "resume":
+        changed = await service.resume_ticket_order(ticket)
+        if changed:
+            await service.add_system_message(
+                ticket,
+                body="Service timer resumed by admin.",
+                payload={"admin_id": callback.from_user.id},
+            )
+            message_text = "Service timer resumed."
+        else:
+            message_text = "Unable to resume (timer not paused or no active duration)."
+    else:
+        await callback.answer("Unknown action.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    filter_code = data.get("support_filter", "open")
+    page = int(data.get("support_page", 0))
+    await _safe_edit_message(
+        callback.message,
+        _format_admin_ticket_detail(ticket),
+        admin_support_ticket_keyboard(ticket, admin_id=callback.from_user.id, filter_code=filter_code, page=page),
+    )
+    await callback.answer(message_text or "Done.")
+
+
 # Helpers
 
 
@@ -496,6 +553,9 @@ def _format_admin_ticket_detail(ticket: SupportTicket) -> str:
         oxapay = _extract_oxapay_meta(ticket.order)
         if oxapay.get("status"):
             lines.append(f"Payment status: {oxapay.get('status')}")
+        service_lines = _format_order_service_lines(ticket.order)
+        if service_lines:
+            lines.extend(service_lines)
     if ticket.meta:
         tags = ticket.meta.get("tags") if isinstance(ticket.meta, dict) else None
         if tags:
@@ -536,6 +596,66 @@ def _format_ticket_resolved_notification(ticket: SupportTicket) -> str:
         "Your ticket has been marked as resolved. Reply in this conversation if you still need help.",
     ]
     return "\n".join(lines)
+
+
+def _format_order_service_lines(order) -> list[str]:
+    if not _order_has_duration(order):
+        return []
+    lines: list[str] = []
+    if order.service_started_at is None:
+        lines.append("Service status: Not started yet.")
+        return lines
+    status = "Paused" if order.service_paused_at else "Active"
+    lines.append(f"Service status: {status}")
+    remaining = _calculate_remaining_seconds(order)
+    if remaining is not None:
+        lines.append(f"Time remaining: {_humanize_seconds(remaining)}")
+        expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=remaining)
+        lines.append(f"ETA expiry: {expires_at:%Y-%m-%d %H:%M UTC}")
+    return lines
+
+
+def _order_has_duration(order) -> bool:
+    value = getattr(order, "service_duration_days", None)
+    return bool(value and value > 0)
+
+
+def _calculate_remaining_seconds(order) -> int | None:
+    if not _order_has_duration(order):
+        return None
+    duration_days = order.service_duration_days or 0
+    started_at = order.service_started_at
+    if started_at is None:
+        return duration_days * 86400
+    elapsed = (datetime.now(tz=timezone.utc) - _ensure_dt(started_at)).total_seconds()
+    paused_total = int(getattr(order, "service_paused_total_seconds", 0) or 0)
+    if getattr(order, "service_paused_at", None):
+        elapsed -= (datetime.now(tz=timezone.utc) - _ensure_dt(order.service_paused_at)).total_seconds()
+    elapsed -= paused_total
+    total_seconds = duration_days * 86400
+    remaining = int(total_seconds - max(elapsed, 0))
+    return max(remaining, 0)
+
+
+def _humanize_seconds(seconds: int) -> str:
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    if minutes or hours or days:
+        parts.append(f"{minutes}m")
+    parts.append(f"{sec}s")
+    return " ".join(parts)
+
+
+def _ensure_dt(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 async def _safe_edit_message(message, text: str, reply_markup) -> None:

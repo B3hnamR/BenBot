@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Iterable
+import math
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import OrderStatus
 from app.infrastructure.db.models import Order, Product
 from app.infrastructure.db.repositories import OrderRepository, ProductRepository
+from app.services.order_duration_service import OrderDurationService
 from app.services.order_timeline_service import OrderTimelineService
 
 
@@ -22,6 +24,7 @@ class OrderService:
         self._orders = OrderRepository(session)
         self._products = ProductRepository(session)
         self._timeline = OrderTimelineService(session)
+        self._duration = OrderDurationService(session)
 
     async def get_product(self, product_id: int) -> Product | None:
         return await self._products.get_by_id(product_id)
@@ -73,6 +76,7 @@ class OrderService:
             extra_attrs=extra_attrs,
         )
         order.status = OrderStatus.AWAITING_PAYMENT
+        await self._duration.start(order, duration_days=getattr(product, "service_duration_days", None))
 
         for key, value in answers:
             await self._orders.add_answer(order, question_key=key, answer_text=value)
@@ -165,6 +169,7 @@ class OrderService:
             actor=actor or "system",
         )
         return order
+
 
     @staticmethod
     def _ensure_utc(value: datetime) -> datetime:

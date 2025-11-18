@@ -5,6 +5,7 @@ from .channels import RequiredChannelRepository
 from .category import CategoryRepository
 from .coupon import CouponRepository
 from .fulfillment_task import FulfillmentTaskRepository
+from .instant_inventory import InstantInventoryRepository
 from .loyalty import LoyaltyRepository
 from .order import OrderRepository
 from .order_feedback import OrderFeedbackRepository
@@ -25,6 +26,7 @@ __all__ = [
     "CategoryRepository",
     "CouponRepository",
     "FulfillmentTaskRepository",
+    "InstantInventoryRepository",
     "LoyaltyRepository",
     "OrderRepository",
     "OrderFeedbackRepository",

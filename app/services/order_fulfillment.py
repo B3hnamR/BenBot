@@ -22,6 +22,7 @@ from app.services.order_status_notifier import notify_user_status
 from app.services.order_summary import build_order_summary
 from app.services.order_timeline_service import OrderTimelineService
 from app.services.timeline_status_service import TimelineStatusRegistry, TimelineStatusService
+from app.services.instant_inventory_service import InstantInventoryService
 
 
 log = get_logger(__name__)
@@ -69,6 +70,7 @@ async def ensure_fulfillment(
 
     task_service = FulfillmentTaskService(session)
     feedback_service = OrderFeedbackService(session)
+    inventory_service = InstantInventoryService(session)
     inventory_update = await _apply_inventory_adjustment(order)
 
     await TimelineStatusService(session).refresh_registry()
@@ -76,8 +78,9 @@ async def ensure_fulfillment(
     timeline_service = OrderTimelineService(session)
 
     try:
+        instant_item = await inventory_service.consume_for_order(order)
         action_result = await fulfillment_service.execute(order, bot)
-        status_note = _build_shipping_note(order, inventory_update, action_result)
+        status_note = _build_shipping_note(order, inventory_update, action_result, instant_item)
 
         existing_events = await timeline_service.list_events(order)
         has_shipping_event = any(
@@ -172,6 +175,7 @@ def _build_shipping_note(
     order: Order,
     inventory_update: InventoryUpdate | None,
     action_result: dict[str, Any] | None,
+    instant_item: Any = None,
 ) -> str | None:
     summary = build_order_summary(order)
     lines: list[str] = []
@@ -196,6 +200,14 @@ def _build_shipping_note(
     if delivery_note:
         lines.append("")
         lines.append(str(delivery_note))
+
+    if instant_item is not None:
+        lines.append("")
+        lines.append("<b>Instant delivery</b>")
+        lines.append(str(getattr(instant_item, "label", "")))
+        payload = getattr(instant_item, "payload", None)
+        if payload:
+            lines.append(str(payload))
 
     context = (action_result or {}).get("context") or {}
     license_code = context.get("license_code")

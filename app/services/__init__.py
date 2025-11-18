@@ -3,7 +3,9 @@ from .cart_service import CartService
 from .category_service import CategoryService
 from .coupon_service import CouponService
 from .fulfillment_task_service import FulfillmentTaskService
+from .instant_inventory_service import InstantInventoryService
 from .loyalty_service import LoyaltyService
+from .order_duration_service import OrderDurationService
 from .order_feedback_service import OrderFeedbackService
 from .order_status_notifier import notify_user_status
 from .order_timeline_service import OrderTimelineService
@@ -19,7 +21,9 @@ __all__ = [
     "CategoryService",
     "CouponService",
     "FulfillmentTaskService",
+    "InstantInventoryService",
     "LoyaltyService",
+    "OrderDurationService",
     "OrderFeedbackService",
     "ProductAdminService",
     "RecommendationService",

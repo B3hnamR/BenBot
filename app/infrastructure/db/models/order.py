@@ -4,7 +4,19 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, JSON, Numeric, SmallInteger, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import OrderStatus
@@ -36,6 +48,12 @@ class Order(IntPKMixin, TimestampMixin, Base):
     payment_charge_id: Mapped[str | None] = mapped_column(String(length=128))
     payment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    service_duration_days: Mapped[int | None] = mapped_column(Integer())
+    service_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    service_paused_total_seconds: Mapped[int] = mapped_column(Integer(), default=0, nullable=False)
+    service_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replacement_of_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"))
+
     notes: Mapped[str | None] = mapped_column(String(length=512))
     extra_attrs: Mapped[dict | None] = mapped_column(JSON())
 
@@ -63,6 +81,26 @@ class Order(IntPKMixin, TimestampMixin, Base):
         "OrderFeedback",
         back_populates="order",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    pause_periods: Mapped[list["OrderPausePeriod"]] = relationship(
+        "OrderPausePeriod",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
+    replacement_parent: Mapped[Optional["Order"]] = relationship(
+        "Order",
+        remote_side="Order.id",
+        back_populates="replacements",
+    )
+    replacements: Mapped[list["Order"]] = relationship(
+        "Order",
+        back_populates="replacement_parent",
+        cascade="all, delete-orphan",
+    )
+    instant_items: Mapped[list["InstantInventoryItem"]] = relationship(
+        "InstantInventoryItem",
+        back_populates="order",
         cascade="all, delete-orphan",
     )
 
@@ -126,3 +164,33 @@ class OrderFeedback(IntPKMixin, TimestampMixin, Base):
 
     order: Mapped[Order] = relationship("Order", back_populates="feedback")
     user: Mapped["UserProfile"] = relationship("UserProfile")
+
+
+class OrderPausePeriod(IntPKMixin, TimestampMixin, Base):
+    __tablename__ = "order_pause_periods"
+
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(length=255))
+
+    order: Mapped[Order] = relationship("Order", back_populates="pause_periods")
+
+
+class InstantInventoryItem(IntPKMixin, TimestampMixin, Base):
+    __tablename__ = "instant_inventory_items"
+
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    label: Mapped[str] = mapped_column(String(length=255))
+    payload: Mapped[str | None] = mapped_column(Text())
+    is_consumed: Mapped[bool] = mapped_column(Boolean(), default=False, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"))
+    metadata: Mapped[dict | None] = mapped_column(JSON())
+
+    order: Mapped[Order | None] = relationship("Order", back_populates="instant_items")
+    product: Mapped["Product"] = relationship("Product")
+
+
+from app.infrastructure.db.models.product import Product  # noqa: E402
+from app.infrastructure.db.models.user import UserProfile  # noqa: E402

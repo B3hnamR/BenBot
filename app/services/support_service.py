@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from app.core.enums import SupportAuthorRole, SupportTicketPriority, SupportTicketStatus
 from app.infrastructure.db.models import SupportTicket
 from app.infrastructure.db.repositories import OrderRepository, SupportRepository, UserRepository
+from app.services.order_duration_service import OrderDurationService
 
 if TYPE_CHECKING:
     from app.services.config_service import ConfigService
@@ -34,6 +35,7 @@ class SupportService:
         self._tickets = SupportRepository(session)
         self._orders = OrderRepository(session)
         self._users = UserRepository(session)
+        self._duration = OrderDurationService(session)
 
     async def create_ticket(
         self,
@@ -156,14 +158,40 @@ class SupportService:
         if ticket.order_id is not None:
             if ticket.order is None:
                 ticket.order = await self._orders.get_by_id(ticket.order_id)  # type: ignore[attr-defined]
-            if ticket.order is not None and "product" not in ticket.order.__dict__:
-                await self._session.refresh(ticket.order, attribute_names=["product"])
+            if ticket.order is not None:
+                missing_attrs = []
+                if "product" not in ticket.order.__dict__:
+                    missing_attrs.append("product")
+                if "pause_periods" not in ticket.order.__dict__:
+                    missing_attrs.append("pause_periods")
+                if missing_attrs:
+                    await self._session.refresh(ticket.order, attribute_names=missing_attrs)
         return ticket
 
     async def ensure_user_loaded(self, ticket: SupportTicket) -> SupportTicket:
         if ticket.user is None:
             ticket.user = await self._users.get_by_id(ticket.user_id)  # type: ignore[attr-defined]
         return ticket
+
+    async def pause_ticket_order(self, ticket: SupportTicket, *, reason: str | None = None) -> bool:
+        await self.ensure_order_loaded(ticket)
+        order = ticket.order
+        if order is None or not self._duration.has_duration(order):
+            return False
+        await self._duration.pause(order, reason=reason)
+        await self._tickets.session.flush()
+        return True
+
+    async def resume_ticket_order(self, ticket: SupportTicket) -> bool:
+        await self.ensure_order_loaded(ticket)
+        order = ticket.order
+        if order is None or not self._duration.has_duration(order):
+            return False
+        if not self._duration.is_paused(order):
+            return False
+        await self._duration.resume(order)
+        await self._tickets.session.flush()
+        return True
 
     async def add_system_message(
         self,

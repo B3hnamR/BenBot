@@ -22,6 +22,8 @@ class Product(IntPKMixin, TimestampMixin, Base):
     inventory_threshold: Mapped[int | None] = mapped_column(Integer())
     is_active: Mapped[bool] = mapped_column(Boolean(), default=True, nullable=False)
     position: Mapped[int] = mapped_column(Integer(), default=0, nullable=False)
+    service_duration_days: Mapped[int | None] = mapped_column(Integer())
+    instant_delivery_enabled: Mapped[bool] = mapped_column(Boolean(), default=False, nullable=False)
     extra_attrs: Mapped[dict | None] = mapped_column(JSON())
 
     questions: Mapped[list["ProductQuestion"]] = relationship(

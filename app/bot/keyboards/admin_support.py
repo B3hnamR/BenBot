@@ -25,6 +25,7 @@ ADMIN_SUPPORT_STATUS_PREFIX = "as:st:"
 ADMIN_SUPPORT_ASSIGN_PREFIX = "admin:sup:assign:"
 ADMIN_SUPPORT_PRIORITY_PREFIX = "admin:sup:priority:"
 ADMIN_SUPPORT_SPAM_PREFIX = "as:sp:"
+ADMIN_SUPPORT_ORDER_ACTION_PREFIX = "admin:sup:order:"
 
 _STATUS_CODE_MAP: dict[SupportTicketStatus, str] = {
     SupportTicketStatus.OPEN: "op",
@@ -143,6 +144,19 @@ def admin_support_ticket_keyboard(
         text=f"Priority: {ticket.priority.value.title()} (set {next_priority.value.title()})",
         callback_data=f"{ADMIN_SUPPORT_PRIORITY_PREFIX}{ticket.public_id}:{next_priority.value}",
     )
+
+    order = getattr(ticket, "order", None)
+    if order and getattr(order, "service_duration_days", None):
+        if getattr(order, "service_paused_at", None):
+            builder.button(
+                text="Resume service timer",
+                callback_data=f"{ADMIN_SUPPORT_ORDER_ACTION_PREFIX}resume:{ticket.public_id}",
+            )
+        else:
+            builder.button(
+                text="Pause service timer",
+                callback_data=f"{ADMIN_SUPPORT_ORDER_ACTION_PREFIX}pause:{ticket.public_id}",
+            )
 
     builder.button(
         text="Back",
